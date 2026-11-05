@@ -1,0 +1,172 @@
+{
+  // Copy to config.local.json on the server and edit; config.local.json is git-ignored.
+  "identDb": "data/idents.db",
+  "chatLogs": {
+    "baseUrl": "https://files.cncnet.org/logs/yr/ChatLogs/",
+    "startDate": "2022-01-01",
+    "refreshDays": 3,
+    "updateIntervalMinutes": 360
+  },
+  "mapPool": "gamedata/maps.json",
+  "whitelist": [],
+  "irc": { "game": "YR", "clientVersion": "", "protocolRevision": "", "gameBroadcastFields": 0, "sendGapMs": 250, "logLobbyChat": true },
+  "admin": { "listen": "http://127.0.0.1:8585", "password": "CHANGE-ME" },
+  "botDb": "data/bot.db",
+  "optionLayout": "gamedata/options.json",
+  "rooms": [
+    {
+      "name": "2v2 Newbies Only",
+      "nick": "NewbieHost",
+      "tier": "Noob",
+      "skillLevel": 1,
+      "maxIdentAgeDays": 150,
+      "useHostAsFallback": true,
+      "kickMessage": "This room is for players new to CnCNet.",
+      "gameMode": "Battle",
+      "maxPlayers": 4,
+      "minPlayersToStart": 4,
+      "requireTeamStartMappings": true,
+      "useTeamStartMappings": true,
+      "readyGraceSeconds": 20,
+      "kickUnreadySeconds": 12,
+      "startDelaySeconds": 10,
+      "abandonAfterLaunch": true,
+      "idleMapRotateMinutes": 20,
+      "tunnel": {
+        "mode": "V3Dynamic",
+        "preferred": [
+          "Europe",
+          "Singapore",
+          "Silicon"
+        ]
+      },
+      "gameOptions": {
+        "chkNoYuri": "true",
+        "chkNoFrance": "true",
+        "chkNoSpy": "true",
+        "chkCrates": "true",
+        "chkDisableGameSpeed": "true",
+        "cmbCredits": "3",
+        "cmbSuperWeaponsModifier": "3",
+        "cmbCratesModifier": "0",
+        "cmbGameSpeedCapMultiplayer": "0"
+      },
+      "enabled": true,
+      "abandonDelaySeconds": 25
+    },
+    {
+      "id": "midhost",
+      "enabled": true,
+      "name": "2v2 Intermediate",
+      "nick": "MidHost",
+      "password": null,
+      "skillLevel": 2,
+      "tier": "Open",
+      "maxIdentAgeDays": 90,
+      "minIdentAgeDays": 90,
+      "useHostAsFallback": true,
+      "kickMessage": null,
+      "gameMode": "Battle",
+      "maxPlayers": 4,
+      "minPlayersToStart": 4,
+      "requireTeamStartMappings": true,
+      "useTeamStartMappings": true,
+      "maps": [],
+      "idleMapRotateMinutes": 20,
+      "readyGraceSeconds": 20,
+      "kickUnreadySeconds": 12,
+      "startDelaySeconds": 10,
+      "abandonAfterLaunch": true,
+      "tunnel": {
+        "mode": "V3Dynamic",
+        "preferred": [
+          "Europe",
+          "Singapore",
+          "Silicon"
+        ]
+      },
+      "gameOptions": {
+        "chkNoYuri": "true",
+        "chkNoFrance": "true",
+        "chkDisableGameSpeed": "true",
+        "cmbSuperWeaponsModifier": "3",
+        "cmbGameSpeedCapMultiplayer": "0",
+        "chkNoSpy": "true",
+        "chkNoStolenTech": "true"
+      },
+      "abandonDelaySeconds": 25
+    },
+    {
+      "name": "2v2 Pros Only",
+      "nick": "ProHost",
+      "tier": "Pro",
+      "allowInvites": true,
+      "skillLevel": 3,
+      "minIdentAgeDays": 365,
+      "kickMessage": "This room is for established players.",
+      "gameMode": "Battle",
+      "maxPlayers": 4,
+      "minPlayersToStart": 4,
+      "requireTeamStartMappings": true,
+      "useTeamStartMappings": true,
+      "readyGraceSeconds": 20,
+      "kickUnreadySeconds": 12,
+      "startDelaySeconds": 10,
+      "abandonAfterLaunch": true,
+      "idleMapRotateMinutes": 20,
+      "tunnel": {
+        "mode": "V3Dynamic",
+        "preferred": [
+          "Europe",
+          "Singapore",
+          "Silicon"
+        ]
+      },
+      "gameOptions": {
+        "chkDisableGameSpeed": "true",
+        "cmbCredits": "5",
+        "cmbSuperWeaponsModifier": "0",
+        "cmbGameSpeedCapMultiplayer": "0"
+      },
+      "enabled": true,
+      "abandonDelaySeconds": 25
+    },
+    {
+      "name": "Host Bot Test",
+      "nick": "HostBotTest",
+      "enabled": false,
+      "password": "test",
+      "tier": "Open",
+      "gameMode": "Battle",
+      "maxPlayers": 4,
+      "minPlayersToStart": 1,
+      "requireTeamStartMappings": true,
+      "useTeamStartMappings": true,
+      "readyGraceSeconds": 20,
+      "kickUnreadySeconds": 12,
+      "startDelaySeconds": 10,
+      "abandonAfterLaunch": true,
+      "idleMapRotateMinutes": 20,
+      "tunnel": {
+        "mode": "V3Dynamic",
+        "preferred": [
+          "Europe",
+          "Singapore",
+          "Silicon"
+        ]
+      },
+      "gameOptions": {
+        "chkNoYuri": "true",
+        "chkNoFrance": "true",
+        "chkNoSpy": "true",
+        "chkCrates": "true",
+        "chkDisableGameSpeed": "true",
+        "cmbCredits": "3",
+        "cmbSuperWeaponsModifier": "3",
+        "cmbCratesModifier": "0",
+        "cmbGameSpeedCapMultiplayer": "0"
+      },
+      "abandonDelaySeconds": 25
+    }
+  ]
+}

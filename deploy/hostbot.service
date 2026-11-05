@@ -1,0 +1,16 @@
+[Unit]
+Description=CnCNet host bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hostbot
+WorkingDirectory=/opt/hostbot
+ExecStart=/opt/hostbot/hostbot run /opt/hostbot/config.local.json
+Restart=always
+RestartSec=10
+Environment=DOTNET_gcServer=0
+
+[Install]
+WantedBy=multi-user.target

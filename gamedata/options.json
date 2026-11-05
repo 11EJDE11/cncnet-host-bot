@@ -1,0 +1,41 @@
+{
+  // Game-option controls of the YR client package in the exact order the client registers them
+  // (docs/protocol/game-lobby.md section 2.5). The order defines the bit/field positions in the
+  // GO message and the GAME broadcast, so it must match the players' GameOptions.ini exactly.
+  // Verify with "hostbot capture <host nick>" against a room hosted by a real client.
+  "checkBoxes": [
+    { "name": "chkShortGame",        "default": true,  "broadcast": true },
+    { "name": "chkRedeplMCV",        "default": true,  "broadcast": false },
+    { "name": "chkAutoRepair",       "default": false, "broadcast": false },
+    { "name": "chkMultiEng",         "default": false, "broadcast": false },
+    { "name": "chkIngameAllying",    "default": true,  "broadcast": false },
+    { "name": "chkDestrBridges",     "default": true,  "broadcast": false },
+    { "name": "chkBuildOffAlly",     "default": true,  "broadcast": false },
+    { "name": "chkRA2Mode",          "default": false, "broadcast": true,  "disallowedSides": [ 9 ] },
+    { "name": "chkBalancePatch",     "default": false, "broadcast": true },
+    { "name": "chkNoSpawnPreviews",  "default": false, "broadcast": false },
+    { "name": "chkDisableGameSpeed", "default": false, "broadcast": false },
+    { "name": "chkNoYuri",           "default": false, "broadcast": true,  "disallowedSides": [ 9 ] },
+    { "name": "chkNoFrance",         "default": false, "broadcast": true,  "disallowedSides": [ 2 ] },
+    { "name": "chkNoSpy",            "default": false, "broadcast": true },
+    { "name": "chkNoStolenTech",     "default": false, "broadcast": true },
+    { "name": "chkNoDogEngiEat",     "default": false, "broadcast": false },
+    { "name": "chkCrates",           "default": false, "broadcast": true },
+    { "name": "chkAutoSave",         "default": false, "broadcast": false }
+  ],
+  "dropDowns": [
+    { "name": "cmbCredits",                 "items": 9, "default": 5, "broadcast": true },
+    { "name": "cmbStartingUnits",           "items": 11, "default": 10, "broadcast": false },
+    { "name": "cmbSuperWeaponsModifier",    "items": 4, "default": 0, "broadcast": true },
+    { "name": "cmbCratesModifier",          "items": 4, "default": 1, "broadcast": true },
+    { "name": "cmbAIModifier",              "items": 4, "default": 0, "broadcast": false },
+    { "name": "cmbGameSpeedCapMultiplayer", "items": 7, "default": 0, "broadcast": true }
+  ],
+  // Sides=America,Korea,France,Germany,Great Britain,Libya,Iraq,Cuba,Russia,Yuri; random selectors Allied, Soviet, Ladder.
+  "sideCount": 10,
+  "randomSelectorCount": 4,
+  "colorCount": 8,
+  "frameSendRate": 7,
+  "maxAhead": 0,
+  "protocolVersion": 2
+}

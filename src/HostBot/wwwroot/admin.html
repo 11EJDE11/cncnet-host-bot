@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host Bot Admin</title>
+<style>
+  :root { --bg:#f4f5f7; --panel:#fff; --ink:#1b1f24; --muted:#6b7280; --line:#e2e5ea; --accent:#2563eb; --bad:#b91c1c; --good:#15803d; --warn:#b45309; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0f1115; --panel:#181b21; --ink:#e6e8ec; --muted:#9aa3b2; --line:#2a2f38; --accent:#60a5fa; --bad:#f87171; --good:#4ade80; --warn:#fbbf24; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:10px 16px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; z-index:2; }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  nav button { background:none; border:1px solid var(--line); color:var(--ink); padding:6px 10px; border-radius:6px; cursor:pointer; }
+  nav button.active { border-color:var(--accent); color:var(--accent); }
+  main { padding:16px; max-width:1400px; margin:0 auto; }
+  section { display:none; } section.active { display:block; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
+  .grid { display:grid; grid-template-columns:1fr; gap:12px; }
+  .chat.small { max-height:180px; font-size:13px; margin:6px 0; }
+  @media (max-width:600px) { .grid { grid-template-columns:1fr; } main { padding:16px 16px; } }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .muted { color:var(--muted); } .bad { color:var(--bad); } .good { color:var(--good); } .warn { color:var(--warn); }
+  input, select, textarea { font:inherit; color:var(--ink); background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:5px 7px; }
+  button.act { font:inherit; background:var(--accent); color:#fff; border:0; border-radius:6px; padding:5px 10px; cursor:pointer; }
+  button.danger { background:var(--bad); }
+  button.ghost { background:none; border:1px solid var(--line); color:var(--ink); }
+  .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin:6px 0; }
+  pre { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:8px; overflow:auto; max-height:60vh; font-size:12px; }
+  .chat { max-height:50vh; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px; background:var(--bg); }
+  .chat div { padding:1px 0; } .chat .out { color:var(--accent); }
+  form.room label { display:block; margin:6px 0; } form.room label span { display:inline-block; width:200px; color:var(--muted); }
+  dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; max-width:720px; width:95vw; }
+  .pill { display:inline-block; padding:1px 7px; border-radius:10px; border:1px solid var(--line); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CnCNet Host Bot</h1>
+  <nav>
+    <button data-tab="rooms" class="active">Rooms</button>
+    <button data-tab="chat">Chat</button>
+    <button data-tab="matches">Matches</button>
+    <button data-tab="idents">Idents</button>
+    <button data-tab="events">Events</button>
+    <button data-tab="lobby">Lobby games</button>
+    <button data-tab="logs">Logs</button>
+  </nav>
+  <span id="clock" class="muted" style="margin-left:auto"></span>
+</header>
+<main>
+  <section id="rooms" class="active">
+    <div class="row">
+      <button class="act" onclick="openRoomForm()">New room</button>
+      <span class="muted" id="identStats"></span>
+      <button class="ghost" onclick="post('/api/idents/import').then(()=>toast('import started'))">Refresh ident DB</button>
+    </div>
+    <div class="grid" id="roomCards"></div>
+    <h3>Whitelist</h3>
+    <div class="row">
+      <input id="wlIdent" placeholder="yr.abc123" size="12">
+      <select id="wlRoom"><option value="">all rooms</option></select>
+      <input id="wlDays" type="number" placeholder="days (empty = forever)" style="width:150px">
+      <input id="wlReason" placeholder="reason" size="20">
+      <button class="ghost" onclick="whitelist()">add</button>
+    </div>
+    <table><thead><tr><th>Ident</th><th>Room</th><th>Kind</th><th>Added by</th><th>Reason</th><th>Expires</th><th></th></tr></thead><tbody id="whitelist"></tbody></table>
+  </section>
+  <section id="chat">
+    <div class="row">
+      <select id="chatRoom"><option value="">all rooms</option></select>
+      <input id="chatChannel" placeholder="channel prefix (e.g. #cncnet-yr, pm:)" size="24">
+      <button class="ghost" onclick="$('#chatChannel').value='pm:';refreshChat(true)">Private messages</button>
+      <button class="ghost" onclick="$('#chatChannel').value='';refreshChat(true)">All</button>
+      <label><input type="checkbox" id="chatLive" checked> live</label>
+    </div>
+    <div class="chat" id="chatLog"></div>
+    <div class="row">
+      <select id="chatSendRoom"></select>
+      <input id="chatText" placeholder="message as the bot" style="flex:1" maxlength="150">
+      <button class="act" onclick="sendChat()">Send</button>
+    </div>
+  </section>
+  <section id="matches"><div class="card"><table id="matchTable"></table></div></section>
+  <section id="idents">
+    <div class="row"><input id="identQuery" placeholder="ident, nick or host fragment" size="30"><button class="act" onclick="searchIdents()">Search</button></div>
+    <div class="card"><table id="identTable"></table></div>
+    <div class="card" id="identDays" style="display:none"></div>
+  </section>
+  <section id="events"><div class="row"><select id="eventType"><option value="">all types</option></select></div><div class="card"><table id="eventTable"></table></div></section>
+  <section id="lobby"><div class="card"><table id="lobbyTable"></table></div></section>
+  <section id="logs"><pre id="logBox"></pre></section>
+</main>
+
+<dialog id="roomDialog">
+  <form class="room" method="dialog" onsubmit="return saveRoom(event)">
+    <h3 id="roomFormTitle">Room</h3>
+    <input type="hidden" id="f_id">
+    <label><span>Room name (max 23)</span><input id="f_name" maxlength="23" required></label>
+    <label><span>Bot nick (max 15)</span><input id="f_nick" maxlength="15" required></label>
+    <label><span>Password (empty = none)</span><input id="f_password" maxlength="20"></label>
+    <label><span>Tier</span><select id="f_tier"><option>Open</option><option>Noob</option><option>Pro</option></select></label>
+    <label><span>Skill level (game list)</span><select id="f_skill"><option value="0">Any</option><option value="1">Beginner</option><option value="2">Intermediate</option><option value="3">Pro</option></select></label>
+    <label><span>Start countdown (seconds) / quick restart after a cancel (seconds)</span><input id="f_startDelay" type="number" value="20" style="width:70px"> <input id="f_quickStart" type="number" value="3" style="width:70px"></label>
+    <label><span>Kick after un-readying during countdown N times (0 = off)</span><input id="f_kickCancel" type="number" value="3"></label>
+    <label><span>Abandon room after launch</span><input id="f_abandon" type="checkbox" checked> after <input id="f_abandonDelay" type="number" value="25" style="width:70px"> s</label>
+    <label><span>Ready kick: grace / kick seconds</span><input id="f_readyGrace" type="number" value="20" style="width:70px"> <input id="f_kickUnready" type="number" value="12" style="width:70px"></label>
+    <label><span>Noob: max ident age (days)</span><input id="f_maxAge" type="number" value="90"></label>
+    <label><span>Pro: min ident age (days)</span><input id="f_minAge" type="number" value="90"></label>
+    <label><span>Noob: use host as fallback</span><input id="f_hostFallback" type="checkbox" checked></label>
+    <label><span>Kick message</span><input id="f_kickMessage" size="50"></label>
+    <label><span>Allow !invite (whitelist for days / invites per player per day)</span><input id="f_invites" type="checkbox"> <input id="f_inviteDays" type="number" value="7" style="width:70px"> <input id="f_inviteMax" type="number" value="3" style="width:70px"></label>
+    <label><span>Game mode</span><select id="f_mode"></select></label>
+    <label><span>Max players</span><input id="f_maxPlayers" type="number" min="2" max="8" value="4"></label>
+    <label><span>Min players to start</span><input id="f_minStart" type="number" min="2" max="8" value="2"></label>
+    <label><span>Only maps with 2v2 team layouts</span><input id="f_teamMaps" type="checkbox" checked></label>
+    <label><span>Explicit map list (one per line, empty = filters)</span><textarea id="f_maps" rows="3" cols="50"></textarea></label>
+    <label><span>Idle map rotate (minutes)</span><input id="f_idle" type="number" value="20"></label>
+    <label><span>Tunnel mode</span><select id="f_tunnelMode"><option>V3Dynamic</option><option>V3</option><option>V2</option></select></label>
+    <label><span>Preferred tunnels (comma)</span><input id="f_tunnelPref" value="Europe,Singapore,Silicon" size="40"></label>
+    <label><span>Votes needed for !vote (0 = off)</span><input id="f_votes" type="number" value="2"></label>
+    <label><span>Game options (name=value per line)</span><textarea id="f_options" rows="3" cols="50" placeholder="chkCrates=true&#10;cmbCredits=3"></textarea></label>
+    <label><span>Enabled</span><input id="f_enabled" type="checkbox" checked></label>
+    <label><span>Restart room now if running</span><input id="f_restart" type="checkbox"></label>
+    <div class="row"><button class="act" type="submit">Save</button><button class="ghost" type="button" onclick="document.getElementById('roomDialog').close()">Cancel</button></div>
+  </form>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = t => t ? new Date(t).toLocaleString() : '';
+const ago = t => { if (!t) return ''; const s = (Date.now() - new Date(t)) / 1000; return s < 90 ? Math.round(s) + 's' : s < 5400 ? Math.round(s/60) + 'm' : Math.round(s/3600) + 'h'; };
+async function get(url) { const r = await fetch(url); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+async function post(url, body, method='POST') { const r = await fetch(url, { method, headers: {'content-type':'application/json'}, body: body ? JSON.stringify(body) : null }); if (!r.ok) { const t = await r.text(); toast(t || r.statusText); throw new Error(t); } return r; }
+function toast(m) { $('#clock').textContent = m; setTimeout(() => $('#clock').textContent = '', 4000); }
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('active', x === b));
+  document.querySelectorAll('main section').forEach(s => s.classList.toggle('active', s.id === b.dataset.tab));
+  refreshTab();
+});
+const activeTab = () => document.querySelector('main section.active').id;
+
+let status = null, gameModes = [];
+async function refreshStatus() {
+  status = await get('/api/status');
+  if (activeTab() === 'rooms') await loadRoomChats();
+  const st = status.idents;
+  $('#identStats').textContent = `Idents: ${st.idents} over ${st.days} days (${st.first ?? '-'}..${st.last ?? '-'})${status.importRunning ? ', import running' : ''}`;
+  renderRooms();
+  const sel = $('#chatRoom'), sel2 = $('#chatSendRoom');
+  const cur = sel.value, cur2 = sel2.value;
+  sel.innerHTML = '<option value="">all rooms</option>' + status.rooms.map(r => `<option value="${esc(r.def.id)}">${esc(r.def.name)}</option>`).join('');
+  sel2.innerHTML = status.rooms.map(r => `<option value="${esc(r.def.id)}">${esc(r.def.name)}</option>`).join('');
+  sel.value = cur; if (cur2) sel2.value = cur2;
+  const wr = $('#wlRoom'), curW = wr.value;
+  wr.innerHTML = '<option value="">all rooms</option>' + status.rooms.map(r => `<option value="${esc(r.def.id)}">${esc(r.def.name)}</option>`).join('');
+  wr.value = curW;
+  $('#logBox').textContent = status.log.join('\n');
+  renderLobby();
+}
+
+const roomChat = {};
+async function loadRoomChats() {
+  await Promise.all(status.rooms.map(async h => {
+    try { roomChat[h.def.id] = await get(`/api/chat?limit=10&room=${encodeURIComponent(h.def.id)}&channel=%23`); } catch { } // newest first
+  }));
+}
+function renderRooms() {
+  // Re-rendering replaces the cards, so remember each room's chat scroll position and any half-typed message.
+  const keep = {};
+  document.querySelectorAll('#roomCards .card[data-room]').forEach(card => {
+    const box = card.querySelector('.chat.small'), say = card.querySelector('input[id^="say_"]');
+    keep[card.dataset.room] = { atBottom: !box || box.scrollHeight - box.scrollTop - box.clientHeight < 10, top: box?.scrollTop ?? 0, say: say?.value ?? '', focus: say && document.activeElement === say };
+  });
+  $('#roomCards').innerHTML = status.rooms.map(h => {
+    const r = h.room, d = h.def;
+    const chat = (roomChat[d.id] ?? []).map(c => `<div class="${c.outgoing ? 'out' : ''}"><span class="muted">${fmt(c.ts)}</span> &lt;${esc(c.nick)}&gt; ${esc(c.text)}</div>`).join('');
+    const players = r ? r.players.map(p => `<tr><td>${esc(p.nick)}</td><td class="muted">${esc(p.ident ?? '')}</td><td>${p.ready ? '<span class="good">ready</span>' : 'not ready'}${p.autoReady ? ' (auto)' : ''}</td><td>${p.isInGame ? '<span class="warn">in game</span>' : ''}${p.hashReceived ? '' : ' <span class="muted">no FHSH</span>'}</td><td>${ago(p.joinedAt)}</td><td><button class="ghost" onclick="kick('${esc(d.id)}','${esc(p.nick)}',0)">kick</button> <button class="ghost" onclick="kick('${esc(d.id)}','${esc(p.nick)}',1)">ban</button></td></tr>`).join('') : '';
+    const neg = r && r.negotiations ? r.negotiations.map(n => `${esc(n.a)}↔${esc(n.b)} <span class="${n.status==='Succeeded'?'good':n.status==='Failed'?'bad':'warn'}">${n.status}</span>${n.ping!=null?' '+n.ping+'ms':''}`).join(', ') : '';
+    return `<div class="card" data-room="${esc(d.id)}">
+      <div class="row"><strong>${esc(d.name)}</strong> <span class="pill">${esc(d.tier)}</span> <span class="pill">${esc(h.status)}</span> <span class="muted">${esc(h.nick ?? d.nick)}${r ? ' ' + esc(r.channel) : ''}</span>
+        <span style="margin-left:auto">
+          ${h.running ? `<button class="ghost" onclick="roomAction('${esc(d.id)}','stop')">Stop</button>` : `<button class="act" onclick="roomAction('${esc(d.id)}','start')">Start</button>`}
+          <button class="ghost" onclick="openRoomForm('${esc(d.id)}')">Edit</button>
+          <button class="ghost danger" onclick="if(confirm('Delete room ${esc(d.name)}?')) post('/api/rooms/${esc(d.id)}',null,'DELETE').then(refreshStatus)">Delete</button>
+        </span></div>
+      ${r ? `<div class="muted">Map: <strong>${esc(r.map)}</strong> (${esc(r.mode)}) · tunnel ${esc(r.tunnelMode)}${r.tunnel ? ' ' + esc(r.tunnel) : ''} · ${r.locked ? 'locked' : 'open'} · ${r.inMatch ? '<span class="warn">match running since ' + ago(r.matchStartedAt) + '</span>' : 'waiting for players'} · up ${ago(r.createdAt)}
+        <button class="ghost" onclick="post('/api/rooms/${esc(d.id)}/nextmap',{}).then(refreshStatus)">Next map</button></div>
+        <table><tr><th>Player</th><th>Ident</th><th>Ready</th><th>State</th><th>Joined</th><th></th></tr>${players}</table>
+        ${neg ? `<div class="muted">Negotiations: ${neg}</div>` : ''}
+        <div class="chat small">${chat || '<span class="muted">no chat yet</span>'}</div>
+        <div class="row"><input id="say_${esc(d.id)}" placeholder="say in room" style="flex:1" maxlength="150" onkeydown="if(event.key==='Enter'){sayRoom('${esc(d.id)}')}"><button class="act" onclick="sayRoom('${esc(d.id)}')">Send</button></div>`
+      : `<div class="muted">${h.running ? 'starting…' : 'stopped'}</div>`}
+    </div>`;
+  }).join('');
+  // Restore: chat boxes show the newest line at the top and stay where the reader scrolled them; typed text survives.
+  document.querySelectorAll('#roomCards .card[data-room]').forEach(card => {
+    const k = keep[card.dataset.room], box = card.querySelector('.chat.small'), say = card.querySelector('input[id^="say_"]');
+    if (box) box.scrollTop = k ? k.top : 0;
+    if (say && k) { say.value = k.say; if (k.focus) { say.focus(); say.setSelectionRange(say.value.length, say.value.length); } }
+  });
+}
+async function roomAction(id, a) { await post(`/api/rooms/${id}/${a}`); setTimeout(refreshStatus, 500); }
+async function kick(id, nick, ban) { const reason = prompt(`Reason shown to ${nick}:`, 'Kicked by an admin.'); if (reason === null) return; await post(`/api/rooms/${id}/kick`, { nick, reason, ban: String(ban) }); setTimeout(refreshStatus, 500); }
+async function sayRoom(id) { const i = $('#say_' + id); if (!i.value.trim()) return; await post(`/api/rooms/${id}/chat`, { text: i.value }); i.value = ''; }
+async function sendChat() { const id = $('#chatSendRoom').value, t = $('#chatText'); if (!id || !t.value.trim()) return; await post(`/api/rooms/${id}/chat`, { text: t.value }); t.value = ''; refreshChat(); }
+async function whitelist() { const ident = $('#wlIdent').value.trim(); if (!ident) return; await post('/api/whitelist', { ident, room: $('#wlRoom').value, days: $('#wlDays').value, reason: $('#wlReason').value }); $('#wlIdent').value = ''; loadWhitelist(); }
+async function unwhitelist(ident, room) { await post('/api/whitelist', { ident, room, remove: '1' }); loadWhitelist(); }
+function roomName(id) { return id ? (status?.rooms.find(r => r.def.id === id)?.def.name ?? id) : 'all rooms'; }
+async function loadWhitelist() {
+  const w = await get('/api/whitelist');
+  $('#whitelist').innerHTML = w.length ? w.map(e => `<tr><td>${esc(e.ident)}</td><td>${esc(roomName(e.room))}</td><td>${esc(e.kind)}</td><td>${esc(e.addedBy ?? '')}</td><td>${esc(e.reason ?? '')}</td><td>${e.expires ? esc(e.expires.slice(0, 16).replace('T', ' ')) : 'never'}</td><td><button class="ghost" onclick="unwhitelist('${esc(e.ident)}','${esc(e.room)}')">remove</button></td></tr>`).join('') : '<tr><td colspan="7" class="muted">(empty)</td></tr>';
+}
+
+let chatAfter = 0;
+async function refreshChat(reset) {
+  if (reset) { chatAfter = 0; $('#chatLog').innerHTML = ''; }
+  const room = $('#chatRoom').value, ch = $('#chatChannel').value.trim();
+  const rows = await get(`/api/chat?limit=300${room ? '&room=' + encodeURIComponent(room) : ''}${ch ? '&channel=' + encodeURIComponent(ch) : ''}&after=${chatAfter}`);
+  rows.reverse();
+  const box = $('#chatLog');
+  const atBottom = reset || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  for (const r of rows) {
+    chatAfter = Math.max(chatAfter, r.id);
+    box.insertAdjacentHTML('beforeend', `<div class="${r.outgoing ? 'out' : ''}"><span class="muted">${fmt(r.ts)} ${esc(r.channel)}</span> &lt;${esc(r.nick)}${r.ident ? ' <span class="muted">' + esc(r.ident) + '</span>' : ''}&gt; ${esc(r.text)}</div>`);
+  }
+  if (rows.length && atBottom) box.scrollTop = box.scrollHeight;
+}
+$('#chatRoom').onchange = () => refreshChat(true); $('#chatChannel').onchange = () => refreshChat(true);
+
+async function refreshMatches() {
+  const rows = await get('/api/matches?limit=200');
+  $('#matchTable').innerHTML = '<tr><th>Started</th><th>Room</th><th>Map</th><th>Players</th><th>Duration</th><th>End</th><th>Tunnel</th></tr>' + rows.map(m => {
+    const ps = JSON.parse(m.players).map(p => esc(p.Nick)).join(', ');
+    const dur = m.ended ? Math.round((new Date(m.ended) - new Date(m.started)) / 60000) + ' min' : '<span class="warn">running</span>';
+    return `<tr><td>${fmt(m.started)}</td><td>${esc(m.room_name)}</td><td>${esc(m.map)} <span class="muted">${esc(m.mode)}</span></td><td>${ps}</td><td>${dur}</td><td>${esc(m.end_reason ?? '')}</td><td class="muted">${esc(m.tunnel_mode)} ${esc(m.tunnel ?? '')}</td></tr>`;
+  }).join('');
+}
+async function searchIdents() {
+  const q = $('#identQuery').value.trim(); if (!q) return;
+  const rows = await get('/api/idents?q=' + encodeURIComponent(q));
+  $('#identTable').innerHTML = '<tr><th>Ident</th><th>First seen</th><th>Last seen</th><th>Days</th><th>Last nick</th><th>Host</th><th>Rooms</th></tr>' + rows.map(r =>
+    `<tr><td><a href="#" onclick="identDays('${esc(r.ident)}');return false">${esc(r.ident)}</a></td><td>${r.firstSeen}</td><td>${r.lastSeen}</td><td>${r.days}</td><td>${esc(r.lastNick)}</td><td class="muted">${esc(r.lastHost ?? '')}</td><td>${r.verdicts.map(v => `<span class="${v.allowed ? 'good' : 'bad'}" title="${esc(v.reason)}">${esc(v.room)}: ${v.allowed ? 'ok' : 'kick'}</span>`).join('<br>')}</td></tr>`).join('');
+}
+async function identDays(ident) {
+  const days = await get(`/api/idents/${encodeURIComponent(ident)}/days`);
+  const box = $('#identDays'); box.style.display = 'block';
+  box.innerHTML = `<strong>${esc(ident)}</strong> — ${days.length} days<table><tr><th>Day</th><th>Nick</th><th>Host</th><th>Joins</th></tr>` + days.map(d => `<tr><td>${d.day}</td><td>${esc(d.nick)}</td><td class="muted">${esc(d.host ?? '')}</td><td>${d.joins}</td></tr>`).join('') + '</table>';
+}
+$('#identQuery').onkeydown = e => { if (e.key === 'Enter') searchIdents(); };
+async function refreshEvents() {
+  const type = $('#eventType').value;
+  const rows = await get('/api/events?limit=300' + (type ? '&type=' + encodeURIComponent(type) : ''));
+  const types = [...new Set(rows.map(r => r.type))];
+  const sel = $('#eventType'); if (sel.options.length <= 1) sel.innerHTML += types.map(t => `<option>${esc(t)}</option>`).join('');
+  $('#eventTable').innerHTML = '<tr><th>Time</th><th>Room</th><th>Type</th><th>Nick</th><th>Ident</th><th>Host</th><th>Detail</th></tr>' + rows.map(r =>
+    `<tr><td>${fmt(r.ts)}</td><td>${esc(r.room ?? '')}</td><td>${esc(r.type)}</td><td>${esc(r.nick ?? '')}</td><td class="muted">${esc(r.ident ?? '')}</td><td class="muted">${esc(r.host ?? '')}</td><td>${esc(r.detail ?? '')}</td></tr>`).join('');
+}
+$('#eventType').onchange = refreshEvents;
+function renderLobby() {
+  const g = status.lobbyGames ?? [];
+  $('#lobbyTable').innerHTML = '<tr><th>Host</th><th>Game</th><th>Players</th><th>Map</th><th>Mode</th><th>Tunnel</th><th>Version</th><th>Fields</th><th>Flags</th></tr>' + g.map(x =>
+    `<tr><td>${esc(x.host)}</td><td>${esc(x.name)}</td><td>${x.players.length}/${x.maxPlayers} ${esc(x.players.join(', '))}</td><td>${esc(x.map)}</td><td>${esc(x.mode)}</td><td class="muted">${esc(x.tunnel)}</td><td>${esc(x.version)}</td><td>${x.fieldCount}</td><td class="muted">${esc(x.flags)}</td></tr>`).join('');
+}
+
+async function openRoomForm(id) {
+  if (!gameModes.length) gameModes = await get('/api/gamemodes');
+  $('#f_mode').innerHTML = gameModes.map(m => `<option>${esc(m)}</option>`).join('');
+  const d = id ? status.rooms.find(r => r.def.id === id).def : null;
+  $('#roomFormTitle').textContent = d ? 'Edit room' : 'New room';
+  $('#f_id').value = d?.id ?? ''; $('#f_name').value = d?.name ?? '2v2 Game'; $('#f_nick').value = d?.nick ?? ''; $('#f_password').value = d?.password ?? '';
+  $('#f_tier').value = d?.tier ?? 'Open'; $('#f_skill').value = d?.skillLevel ?? 0; $('#f_startDelay').value = d?.startDelaySeconds ?? 20; $('#f_quickStart').value = d?.quickStartSeconds ?? 3; $('#f_kickCancel').value = d?.kickAfterCancelledStarts ?? 3; $('#f_abandon').checked = d?.abandonAfterLaunch ?? true; $('#f_abandonDelay').value = d?.abandonDelaySeconds ?? 25; $('#f_readyGrace').value = d?.readyGraceSeconds ?? 20; $('#f_kickUnready').value = d?.kickUnreadySeconds ?? 12; $('#f_votes').value = d?.votesNeeded ?? 2; $('#f_maxAge').value = d?.maxIdentAgeDays ?? 90; $('#f_minAge').value = d?.minIdentAgeDays ?? 90; $('#f_hostFallback').checked = d?.useHostAsFallback ?? true;
+  $('#f_invites').checked = d?.allowInvites ?? false; $('#f_inviteDays').value = d?.inviteDays ?? 7; $('#f_inviteMax').value = d?.maxInvitesPerDay ?? 3;
+  $('#f_kickMessage').value = d?.kickMessage ?? ''; $('#f_mode').value = d?.gameMode ?? 'Battle'; $('#f_maxPlayers').value = d?.maxPlayers ?? 4; $('#f_minStart').value = d?.minPlayersToStart ?? 2;
+  $('#f_teamMaps').checked = d?.requireTeamStartMappings ?? true; $('#f_maps').value = (d?.maps ?? []).join('\n'); $('#f_idle').value = d?.idleMapRotateMinutes ?? 20;
+  $('#f_tunnelMode').value = d?.tunnel?.mode ?? 'V3Dynamic'; $('#f_tunnelPref').value = (d?.tunnel?.preferred ?? ['Europe','Singapore','Silicon']).join(',');
+  $('#f_options').value = Object.entries(d?.gameOptions ?? {}).map(([k, v]) => k + '=' + v).join('\n'); $('#f_enabled').checked = d?.enabled ?? true; $('#f_restart').checked = false;
+  $('#roomDialog').showModal();
+}
+async function saveRoom(e) {
+  e.preventDefault();
+  const opts = {}; $('#f_options').value.split('\n').map(l => l.trim()).filter(Boolean).forEach(l => { const i = l.indexOf('='); if (i > 0) opts[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
+  const def = { id: $('#f_id').value, name: $('#f_name').value, nick: $('#f_nick').value, password: $('#f_password').value || null, tier: $('#f_tier').value,
+    skillLevel: +$('#f_skill').value, startDelaySeconds: +$('#f_startDelay').value, quickStartSeconds: +$('#f_quickStart').value, kickAfterCancelledStarts: +$('#f_kickCancel').value, abandonAfterLaunch: $('#f_abandon').checked, abandonDelaySeconds: +$('#f_abandonDelay').value, readyGraceSeconds: +$('#f_readyGrace').value, kickUnreadySeconds: +$('#f_kickUnready').value, votesNeeded: +$('#f_votes').value,
+    maxIdentAgeDays: +$('#f_maxAge').value, minIdentAgeDays: +$('#f_minAge').value, useHostAsFallback: $('#f_hostFallback').checked, kickMessage: $('#f_kickMessage').value || null,
+    allowInvites: $('#f_invites').checked, inviteDays: +$('#f_inviteDays').value, maxInvitesPerDay: +$('#f_inviteMax').value,
+    gameMode: $('#f_mode').value, maxPlayers: +$('#f_maxPlayers').value, minPlayersToStart: +$('#f_minStart').value, requireTeamStartMappings: $('#f_teamMaps').checked,
+    maps: $('#f_maps').value.split('\n').map(s => s.trim()).filter(Boolean), idleMapRotateMinutes: +$('#f_idle').value,
+    tunnel: { mode: $('#f_tunnelMode').value, preferred: $('#f_tunnelPref').value.split(',').map(s => s.trim()).filter(Boolean) }, gameOptions: opts, enabled: $('#f_enabled').checked };
+  try {
+    if (def.id) await post(`/api/rooms/${def.id}?restart=${$('#f_restart').checked ? 1 : 0}`, def, 'PUT'); else await post('/api/rooms', def);
+    $('#roomDialog').close(); refreshStatus();
+  } catch (err) { /* toast already shown */ }
+  return false;
+}
+
+function refreshTab() { const t = activeTab(); if (t === 'chat') refreshChat(true); else if (t === 'matches') refreshMatches(); else if (t === 'events') refreshEvents(); }
+refreshStatus(); loadWhitelist();
+setInterval(() => { refreshStatus(); if (activeTab() === 'rooms') loadWhitelist(); const t = activeTab(); if (t === 'chat' && $('#chatLive').checked) refreshChat(false); if (t === 'events') refreshEvents(); }, 5000);
+</script>
+</body>
+</html>
