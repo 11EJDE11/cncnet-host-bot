@@ -68,6 +68,7 @@ public sealed class AdminServer
             rooms = _rooms.Hosts.Select(HostInfo).ToList(),
             lobbyGames = _rooms.Hosts.Select(h => h.Observer).FirstOrDefault(o => o is not null)?.Games(),
             log = Log.Recent(200),
+            logFile = Log.FilePath,
         }));
 
         app.MapGet("/api/rooms", () => Json(_rooms.Hosts.Select(HostInfo).ToList()));

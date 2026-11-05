@@ -16,3 +16,4 @@ bin/dev2/
 *.log
 *.err
 live*.log
+logs/

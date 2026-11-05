@@ -21,6 +21,8 @@ public sealed class BotConfig
 
     public AdminConfig Admin { get; set; } = new();
 
+    public LoggingConfig Logging { get; set; } = new();
+
     /// <summary>Bot state database: rooms, chat log, events, match history.</summary>
     public string BotDb { get; set; } = "data/bot.db";
 
@@ -78,6 +80,18 @@ public sealed class IrcConfig
     /// <summary>Optional fixed server; empty means use the client's built-in list.</summary>
     public string? Server { get; set; }
     public int? Port { get; set; }
+}
+
+public sealed class LoggingConfig
+{
+    /// <summary>Folder for the daily log files (hostbot-yyyy-MM-dd.log, UTC days). Empty disables file logging.</summary>
+    public string Directory { get; set; } = "logs";
+    /// <summary>Delete log files older than this many days. 0 keeps everything.</summary>
+    public int KeepDays { get; set; } = 14;
+    /// <summary>Log every IRC line (same as the -v switch). Large: roughly 70 MB a day on a busy lobby.</summary>
+    public bool Debug { get; set; }
+    /// <summary>Also write to standard output. Turn off under systemd to avoid duplicating the file into the journal.</summary>
+    public bool Console { get; set; } = true;
 }
 
 public sealed class AdminConfig

@@ -11,6 +11,7 @@
   "whitelist": [],
   "irc": { "game": "YR", "clientVersion": "", "protocolRevision": "", "gameBroadcastFields": 0, "sendGapMs": 250, "logLobbyChat": true },
   "admin": { "listen": "http://127.0.0.1:8585", "password": "CHANGE-ME" },
+  "logging": { "directory": "logs", "keepDays": 14, "debug": false, "console": true },
   "botDb": "data/bot.db",
   "optionLayout": "gamedata/options.json",
   "rooms": [

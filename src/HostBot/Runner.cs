@@ -14,6 +14,13 @@ public static class Runner
 
     public static async Task<int> RunAsync(BotConfig config, CancellationToken ct)
     {
+        if (config.Logging.Debug) Log.Verbose = true;
+        Log.ToConsole = config.Logging.Console;
+        if (!string.IsNullOrWhiteSpace(config.Logging.Directory))
+        {
+            Log.ConfigureFile(config.Logging.Directory, config.Logging.KeepDays);
+            Log.Info(Tag, $"logging to {Log.FilePath} (keeping {config.Logging.KeepDays} days{(Log.Verbose ? ", debug on" : "")})");
+        }
         using var identStore = new IdentStore(config.IdentDb);
         using var db = new BotDb(config.BotDb);
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };

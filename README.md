@@ -14,6 +14,8 @@ What it does:
 - Relays player options, ready states and V3 dynamic-tunnel negotiation reports exactly like a
   client host, and launches the game when everyone is ready.
 - Logs every chat line, join, kick and match to SQLite.
+- Writes its own log to `logs/hostbot-yyyy-MM-dd.log` (one file per UTC day, old files pruned after
+  `logging.keepDays`); `-v` or `logging.debug` adds every IRC line.
 - Serves an admin page: rooms (create, edit, stop, delete, kick, ban, next map, chat), chat
   log, match history, ident search with per-room verdicts, events, the live lobby game list,
   whitelist and bot log.
