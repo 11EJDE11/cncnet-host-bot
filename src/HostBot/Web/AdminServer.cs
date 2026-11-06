@@ -116,9 +116,34 @@ public sealed class AdminServer
             return Results.Ok();
         });
 
-        app.MapGet("/api/maps", (string? mode, int? players) => Json(_pool.Maps
-            .Where(m => (mode is null || m.GameModes.Contains(mode, StringComparer.OrdinalIgnoreCase)) && (players is null || m.MaxPlayers == players))
-            .Select(m => new { m.Name, m.BaseFilePath, m.MaxPlayers, m.GameModes, teamMappings = m.TeamStartMappings.Count }).ToList()));
+        // Map catalogue for the room form: every map of a game mode with its team layouts and, for an
+        // existing room, how often it was played or voted away there and the resulting pick weight.
+        app.MapGet("/api/maps", (string? mode, int? players, string? room) =>
+        {
+            var stats = room is null ? new() : _db.LoadMapStats(room);
+            double penalty = room is null ? 0 : _rooms.Get(room)?.Def.NextMapPenalty ?? 0;
+            return Json(_pool.Maps
+                .Where(m => (mode is null || m.GameModes.Contains(mode, StringComparer.OrdinalIgnoreCase)) && (players is null || m.MaxPlayers == players))
+                .Select(m =>
+                {
+                    var s = stats.GetValueOrDefault(m.BaseFilePath);
+                    return new
+                    {
+                        m.Name, m.BaseFilePath, m.MaxPlayers, m.Author, m.GameModes,
+                        teamSizes = MapPoolFile.TeamSizes(m),
+                        plays = s?.Plays ?? 0, skips = s?.Skips ?? 0,
+                        weight = Math.Round(GameRoom.MapWeight(penalty, s), 2),
+                        lastPlayed = s?.LastPlayed, lastSkipped = s?.LastSkipped,
+                    };
+                }).ToList());
+        });
+        app.MapPost("/api/rooms/{id}/mapstats/reset", (string id) =>
+        {
+            if (_rooms.Get(id) is null) return Results.NotFound();
+            _db.ResetMapStats(id);
+            _db.LogEvent(id, "mapstats_reset", null, null, null, null);
+            return Results.Ok();
+        });
         app.MapGet("/api/gamemodes", () => Json(_pool.GameModes.Select(g => g.Name).ToList()));
 
         app.MapGet("/api/chat", (string? room, string? channel, long? after, int? limit) =>

@@ -49,23 +49,45 @@ public sealed class MapPoolFile
         JsonSerializer.Deserialize<MapPoolFile>(File.ReadAllText(path), BotConfig.JsonOptions)
         ?? throw new InvalidDataException($"{path}: empty map pool");
 
-    /// <summary>Maps matching a room's filters, in MPMaps.ini order.</summary>
-    public List<MapEntry> Select(RoomConfig room)
+    /// <summary>
+    /// A room's map pool for a given room size, in MPMaps.ini order: every map matching the room's
+    /// filters plus the explicitly added ones, minus the excluded ones.
+    /// </summary>
+    public List<MapEntry> Select(RoomConfig room, int maxPlayers)
     {
-        IEnumerable<MapEntry> q = Maps;
-        if (room.Maps.Count > 0)
-        {
-            var wanted = new HashSet<string>(room.Maps, StringComparer.OrdinalIgnoreCase);
-            q = q.Where(m => wanted.Contains(m.BaseFilePath) || wanted.Contains(m.Name));
-        }
-        else
-        {
-            q = q.Where(m => m.MaxPlayers == room.MaxPlayers
-                             && m.GameModes.Contains(room.GameMode, StringComparer.OrdinalIgnoreCase)
-                             && (!room.RequireTeamStartMappings || m.TeamStartMappings.Count > 0));
-        }
-        return q.ToList();
+        var extra = new HashSet<string>(room.Maps, StringComparer.OrdinalIgnoreCase);
+        var excluded = new HashSet<string>(room.ExcludedMaps, StringComparer.OrdinalIgnoreCase);
+        return Maps.Where(m => !excluded.Contains(m.BaseFilePath)
+                               && (extra.Contains(m.BaseFilePath) || extra.Contains(m.Name) || MatchesFilters(m, room, maxPlayers)))
+                   .ToList();
     }
+
+    public List<MapEntry> Select(RoomConfig room) => Select(room, room.MaxPlayers);
+
+    /// <summary>Whether the room's filters (player count, game mode, team layout) admit the map at this room size.</summary>
+    public static bool MatchesFilters(MapEntry m, RoomConfig room, int maxPlayers) =>
+        m.MaxPlayers == maxPlayers
+        && m.GameModes.Contains(room.GameMode, StringComparer.OrdinalIgnoreCase)
+        && (!room.RequireTeamStartMappings || TeamMapping(m, maxPlayers / 2) is not null);
+
+    /// <summary>
+    /// The map's first start-position layout that forms exactly two teams of the given size (A and B,
+    /// no unused spots), e.g. "A,A,B,B" for 2v2 or "A,A,A,B,B,B" for 3v3. Null if the map has none.
+    /// </summary>
+    public static TeamStartMapping? TeamMapping(MapEntry m, int teamSize)
+    {
+        foreach (var t in m.TeamStartMappings)
+        {
+            var letters = t.Mapping.Split(',', StringSplitOptions.TrimEntries).Select(s => s.ToUpperInvariant()).ToList();
+            if (letters.Count == teamSize * 2 && letters.Count(l => l == "A") == teamSize && letters.Count(l => l == "B") == teamSize)
+                return t;
+        }
+        return null;
+    }
+
+    /// <summary>Team sizes (2 for 2v2, 3 for 3v3, ...) for which the map has a two-team layout.</summary>
+    public static List<int> TeamSizes(MapEntry m) =>
+        Enumerable.Range(1, 4).Where(n => TeamMapping(m, n) is not null).ToList();
 }
 
 public static class MapPoolBuilder

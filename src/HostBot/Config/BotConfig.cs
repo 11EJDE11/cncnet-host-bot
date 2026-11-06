@@ -134,9 +134,21 @@ public sealed class RoomConfig
     public int MaxInvitesPerDay { get; set; } = 3;
 
     public string GameMode { get; set; } = "Battle";
+    /// <summary>Room size: 4 for 2v2, 6 for 3v3. Teams are always two equal halves.</summary>
     public int MaxPlayers { get; set; } = 4;
-    /// <summary>Only use maps that define 2v2 team start mappings.</summary>
+    /// <summary>Open the room as 3v3 (6 players) instead while the CnCNet lobby is busy; the switch happens whenever the room is empty.</summary>
+    public bool AutoThreeVsThree { get; set; }
+    /// <summary>Lobby user count (people in the main chat channel) from which the room becomes 3v3; it drops back to the configured size 10% below that.</summary>
+    public int AutoThreeVsThreeLobbyUsers { get; set; } = 550;
+    /// <summary>Seats beyond the player slots for people who pick Spectator in the side list (capped so players + spectators stay within 8). 0 = no extra seats.</summary>
+    public int MaxSpectators { get; set; } = 2;
+    /// <summary>Only use maps that define a two-team start layout for the room size (2v2 or 3v3).</summary>
     public bool RequireTeamStartMappings { get; set; } = true;
+    /// <summary>
+    /// How much each passed "!next" vote lowers a map's chance of being picked again in this room.
+    /// Pick weight = 1 / (1 + penalty * max(0, skips - plays / 2)), never below 0.2. 0 disables the ranking.
+    /// </summary>
+    public double NextMapPenalty { get; set; } = 0.25;
     /// <summary>Auto-ally: send the map's team start mapping so teams follow start positions (players pick a spot, not a team).</summary>
     public bool UseTeamStartMappings { get; set; } = true;
     /// <summary>When the room is full, a player who is still not ready after this many seconds is warned.</summary>
@@ -153,8 +165,10 @@ public sealed class RoomConfig
     public bool AbandonAfterLaunch { get; set; } = true;
     /// <summary>How long after the start message the bot leaves the old channel; long enough for the game to be running so the "player left" sound is not mistaken for a quitter.</summary>
     public int AbandonDelaySeconds { get; set; } = 25;
-    /// <summary>Optional explicit map list (section names from MPMaps.ini); empty means every map matching the filters.</summary>
+    /// <summary>Maps (MPMaps.ini section names) added to the pool although they do not match the filters.</summary>
     public List<string> Maps { get; set; } = new();
+    /// <summary>Maps (MPMaps.ini section names) ticked off on the admin page; never picked even if the filters match.</summary>
+    public List<string> ExcludedMaps { get; set; } = new();
     /// <summary>Change the map after this long with nobody in the room.</summary>
     public int IdleMapRotateMinutes { get; set; } = 20;
 

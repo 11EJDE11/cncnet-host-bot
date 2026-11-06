@@ -32,8 +32,12 @@
   .chat { max-height:50vh; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:6px; background:var(--bg); }
   .chat div { padding:1px 0; } .chat .out { color:var(--accent); }
   form.room label { display:block; margin:6px 0; } form.room label span { display:inline-block; width:200px; color:var(--muted); }
-  dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; max-width:720px; width:95vw; }
+  dialog { background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:8px; max-width:960px; width:95vw; }
   .pill { display:inline-block; padding:1px 7px; border-radius:10px; border:1px solid var(--line); font-size:12px; }
+  .maplist { max-height:320px; overflow:auto; border:1px solid var(--line); border-radius:6px; background:var(--bg); padding:4px 8px; }
+  .maplist details summary { cursor:pointer; font-weight:600; padding:4px 0; }
+  .maplist table { font-size:12px; } .maplist td { padding:2px 4px; border:0; } .maplist tr.off { color:var(--muted); }
+  .maplist .pill { font-size:11px; padding:0 5px; margin-right:2px; }
 </style>
 </head>
 <body>
@@ -113,10 +117,20 @@
     <label><span>Kick message</span><input id="f_kickMessage" size="50"></label>
     <label><span>Allow !invite (whitelist for days / invites per player per day)</span><input id="f_invites" type="checkbox"> <input id="f_inviteDays" type="number" value="7" style="width:70px"> <input id="f_inviteMax" type="number" value="3" style="width:70px"></label>
     <label><span>Game mode</span><select id="f_mode"></select></label>
-    <label><span>Max players</span><input id="f_maxPlayers" type="number" min="2" max="8" value="4"></label>
-    <label><span>Min players to start</span><input id="f_minStart" type="number" min="2" max="8" value="2"></label>
-    <label><span>Only maps with 2v2 team layouts</span><input id="f_teamMaps" type="checkbox" checked></label>
-    <label><span>Explicit map list (one per line, empty = filters)</span><textarea id="f_maps" rows="3" cols="50"></textarea></label>
+    <label><span>Room size</span><select id="f_maxPlayers"><option value="2">1v1 (2 players)</option><option value="4" selected>2v2 (4 players)</option><option value="6">3v3 (6 players)</option><option value="8">4v4 (8 players)</option></select></label>
+    <label><span>Auto 3v3 while the lobby has more than N users (switches when the room is empty)</span><input id="f_auto3v3" type="checkbox"> <input id="f_auto3v3Users" type="number" min="1" value="550" style="width:80px"></label>
+    <label><span>Min players to start (= room size for a full room)</span><input id="f_minStart" type="number" min="1" max="8" value="4"></label>
+    <label><span>Spectator seats beyond the player slots (players + spectators ≤ 8)</span><input id="f_spectators" type="number" min="0" max="6" value="2"></label>
+    <label><span>Only maps with a two-team start layout for the room size</span><input id="f_teamMaps" type="checkbox" checked></label>
+    <label><span>!next penalty per vote (0 = off; weight = 1/(1+p·skips), min 0.2)</span><input id="f_nextPenalty" type="number" min="0" max="10" step="0.05" value="0.25" style="width:80px"></label>
+    <label><span>Maps</span>
+      <input id="mapFilter" placeholder="filter by name" size="18" oninput="renderMapList()">
+      <button class="ghost" type="button" onclick="tickShown(true)">tick shown</button>
+      <button class="ghost" type="button" onclick="tickShown(false)">untick shown</button>
+      <button class="ghost" type="button" onclick="resetMapStats()">reset play/skip stats</button>
+      <span class="muted" id="mapSummary"></span>
+    </label>
+    <div class="maplist" id="mapList"><span class="muted">loading…</span></div>
     <label><span>Idle map rotate (minutes)</span><input id="f_idle" type="number" value="20"></label>
     <label><span>Tunnel mode</span><select id="f_tunnelMode"><option>V3Dynamic</option><option>V3</option><option>V2</option></select></label>
     <label><span>Preferred tunnels (comma)</span><input id="f_tunnelPref" value="Europe,Singapore,Silicon" size="40"></label>
@@ -179,10 +193,10 @@ function renderRooms() {
   $('#roomCards').innerHTML = status.rooms.map(h => {
     const r = h.room, d = h.def;
     const chat = (roomChat[d.id] ?? []).map(c => `<div class="${c.outgoing ? 'out' : ''}"><span class="muted">${fmt(c.ts)}</span> &lt;${esc(c.nick)}&gt; ${esc(c.text)}</div>`).join('');
-    const players = r ? r.players.map(p => `<tr><td>${esc(p.nick)}</td><td class="muted">${esc(p.ident ?? '')}</td><td>${p.ready ? '<span class="good">ready</span>' : 'not ready'}${p.autoReady ? ' (auto)' : ''}</td><td>${p.isInGame ? '<span class="warn">in game</span>' : ''}${p.hashReceived ? '' : ' <span class="muted">no FHSH</span>'}</td><td>${ago(p.joinedAt)}</td><td><button class="ghost" onclick="kick('${esc(d.id)}','${esc(p.nick)}',0)">kick</button> <button class="ghost" onclick="kick('${esc(d.id)}','${esc(p.nick)}',1)">ban</button></td></tr>`).join('') : '';
+    const players = r ? r.players.map(p => `<tr><td>${esc(p.nick)}</td><td class="muted">${esc(p.ident ?? '')}</td><td>${p.ready ? '<span class="good">ready</span>' : 'not ready'}${p.autoReady ? ' (auto)' : ''}</td><td>${p.spectator ? '<span class="pill">spectator</span> ' : ''}${p.mustSpectateBy ? '<span class="warn">must spectate</span> ' : ''}${p.isInGame ? '<span class="warn">in game</span>' : ''}${p.hashReceived ? '' : ' <span class="muted">no FHSH</span>'}</td><td>${ago(p.joinedAt)}</td><td><button class="ghost" onclick="kick('${esc(d.id)}','${esc(p.nick)}',0)">kick</button> <button class="ghost" onclick="kick('${esc(d.id)}','${esc(p.nick)}',1)">ban</button></td></tr>`).join('') : '';
     const neg = r && r.negotiations ? r.negotiations.map(n => `${esc(n.a)}↔${esc(n.b)} <span class="${n.status==='Succeeded'?'good':n.status==='Failed'?'bad':'warn'}">${n.status}</span>${n.ping!=null?' '+n.ping+'ms':''}`).join(', ') : '';
     return `<div class="card" data-room="${esc(d.id)}">
-      <div class="row"><strong>${esc(d.name)}</strong> <span class="pill">${esc(d.tier)}</span> <span class="pill">${esc(h.status)}</span> <span class="muted">${esc(h.nick ?? d.nick)}${r ? ' ' + esc(r.channel) : ''}</span>
+      <div class="row"><strong>${esc(r?.roomName ?? d.name)}</strong> <span class="pill">${esc(d.tier)}</span> <span class="pill">${esc(h.status)}</span>${r ? ` <span class="pill" title="lobby has ${r.lobbyUsers} users${d.autoThreeVsThree ? ', 3v3 above ' + d.autoThreeVsThreeLobbyUsers : ''}">${r.maxPlayers / 2}v${r.maxPlayers / 2}${r.threeVsThree ? ' (auto)' : ''} · lobby ${r.lobbyUsers}</span>` : ''} <span class="muted">${esc(h.nick ?? d.nick)}${r ? ' ' + esc(r.channel) : ''}</span>
         <span style="margin-left:auto">
           ${h.running ? `<button class="ghost" onclick="roomAction('${esc(d.id)}','stop')">Stop</button>` : `<button class="act" onclick="roomAction('${esc(d.id)}','start')">Start</button>`}
           <button class="ghost" onclick="openRoomForm('${esc(d.id)}')">Edit</button>
@@ -275,12 +289,74 @@ async function openRoomForm(id) {
   $('#f_id').value = d?.id ?? ''; $('#f_name').value = d?.name ?? '2v2 Game'; $('#f_nick').value = d?.nick ?? ''; $('#f_password').value = d?.password ?? '';
   $('#f_tier').value = d?.tier ?? 'Open'; $('#f_skill').value = d?.skillLevel ?? 0; $('#f_startDelay').value = d?.startDelaySeconds ?? 20; $('#f_quickStart').value = d?.quickStartSeconds ?? 3; $('#f_kickCancel').value = d?.kickAfterCancelledStarts ?? 3; $('#f_abandon').checked = d?.abandonAfterLaunch ?? true; $('#f_abandonDelay').value = d?.abandonDelaySeconds ?? 25; $('#f_readyGrace').value = d?.readyGraceSeconds ?? 20; $('#f_kickUnready').value = d?.kickUnreadySeconds ?? 12; $('#f_votes').value = d?.votesNeeded ?? 2; $('#f_maxAge').value = d?.maxIdentAgeDays ?? 90; $('#f_minAge').value = d?.minIdentAgeDays ?? 90; $('#f_hostFallback').checked = d?.useHostAsFallback ?? true;
   $('#f_invites').checked = d?.allowInvites ?? false; $('#f_inviteDays').value = d?.inviteDays ?? 7; $('#f_inviteMax').value = d?.maxInvitesPerDay ?? 3;
-  $('#f_kickMessage').value = d?.kickMessage ?? ''; $('#f_mode').value = d?.gameMode ?? 'Battle'; $('#f_maxPlayers').value = d?.maxPlayers ?? 4; $('#f_minStart').value = d?.minPlayersToStart ?? 2;
-  $('#f_teamMaps').checked = d?.requireTeamStartMappings ?? true; $('#f_maps').value = (d?.maps ?? []).join('\n'); $('#f_idle').value = d?.idleMapRotateMinutes ?? 20;
+  $('#f_kickMessage').value = d?.kickMessage ?? ''; $('#f_mode').value = d?.gameMode ?? 'Battle'; $('#f_maxPlayers').value = d?.maxPlayers ?? 4; $('#f_minStart').value = d?.minPlayersToStart ?? 4;
+  $('#f_auto3v3').checked = d?.autoThreeVsThree ?? false; $('#f_auto3v3Users').value = d?.autoThreeVsThreeLobbyUsers ?? 550; $('#f_nextPenalty').value = d?.nextMapPenalty ?? 0.25; $('#f_spectators').value = d?.maxSpectators ?? 2;
+  $('#f_teamMaps').checked = d?.requireTeamStartMappings ?? true; $('#f_idle').value = d?.idleMapRotateMinutes ?? 20;
   $('#f_tunnelMode').value = d?.tunnel?.mode ?? 'V3Dynamic'; $('#f_tunnelPref').value = (d?.tunnel?.preferred ?? ['Europe','Singapore','Silicon']).join(',');
   $('#f_options').value = Object.entries(d?.gameOptions ?? {}).map(([k, v]) => k + '=' + v).join('\n'); $('#f_enabled').checked = d?.enabled ?? true; $('#f_restart').checked = false;
+  $('#mapFilter').value = '';
+  mapState = { roomId: d?.id ?? '', maps: [], extra: new Set(d?.maps ?? []), excluded: new Set(d?.excludedMaps ?? []) };
   $('#roomDialog').showModal();
+  await loadMapList();
 }
+
+// ---- map picker: the pool is "maps matching the filters, plus ticked extras, minus unticked (excluded) ones" ----
+let mapState = { roomId: '', maps: [], extra: new Set(), excluded: new Set() };
+const sizeOf = () => +$('#f_maxPlayers').value;
+const poolSizes = () => { const s = [sizeOf()]; if ($('#f_auto3v3').checked && sizeOf() < 6) s.push(6); return s; };
+function matchesFilters(m, size) { return m.maxPlayers === size && (!$('#f_teamMaps').checked || m.teamSizes.includes(size / 2)); }
+function inFilters(m) { return poolSizes().some(s => matchesFilters(m, s)); }
+function isTicked(m) { return inFilters(m) ? !mapState.excluded.has(m.baseFilePath) : mapState.extra.has(m.baseFilePath); }
+function toggleMap(path, on) {
+  const m = mapState.maps.find(x => x.baseFilePath === path); if (!m) return;
+  if (inFilters(m)) { if (on) mapState.excluded.delete(path); else mapState.excluded.add(path); }
+  else { if (on) mapState.extra.add(path); else mapState.extra.delete(path); }
+  renderMapList();
+}
+async function loadMapList() {
+  $('#mapList').innerHTML = '<span class="muted">loading…</span>';
+  try { mapState.maps = await get(`api/maps?mode=${encodeURIComponent($('#f_mode').value)}${mapState.roomId ? '&room=' + encodeURIComponent(mapState.roomId) : ''}`); }
+  catch (e) { $('#mapList').innerHTML = `<span class="bad">${esc(e.message)}</span>`; return; }
+  renderMapList();
+}
+function renderMapList() {
+  const q = $('#mapFilter').value.trim().toLowerCase(), sizes = poolSizes();
+  const shown = mapState.maps.filter(m => !q || m.name.toLowerCase().includes(q) || (m.author ?? '').toLowerCase().includes(q));
+  const groups = [...new Set(shown.map(m => m.maxPlayers))].sort((a, b) => (sizes.includes(a) ? 0 : 1) - (sizes.includes(b) ? 0 : 1) || a - b);
+  const keepOpen = {}; document.querySelectorAll('#mapList details').forEach(d => keepOpen[d.dataset.size] = d.open);
+  $('#mapList').innerHTML = groups.map(size => {
+    const ms = shown.filter(m => m.maxPlayers === size), relevant = sizes.includes(size);
+    const open = keepOpen[size] ?? relevant;
+    const rows = ms.map(m => {
+      const on = isTicked(m), fit = inFilters(m);
+      const layouts = m.teamSizes.map(t => `<span class="pill">${t}v${t}</span>`).join('') || '<span class="muted">no team layout</span>';
+      const stat = (m.plays || m.skips) ? `${m.plays} played, ${m.skips} skipped → weight ${m.weight}` : '';
+      return `<tr class="${on ? '' : 'off'}"><td><input type="checkbox" ${on ? 'checked' : ''} onchange="toggleMap('${esc(m.baseFilePath)}', this.checked)" title="${fit ? 'in the filters' : 'outside the filters (extra map)'}"></td><td>${esc(m.name)}${fit ? '' : ' <span class="muted">(extra)</span>'}</td><td class="muted">${esc(m.author ?? '')}</td><td>${layouts}</td><td class="muted">${stat}</td></tr>`;
+    }).join('');
+    const ticked = ms.filter(isTicked).length;
+    return `<details data-size="${size}" ${open ? 'open' : ''}><summary>${size}-player maps (${size / 2}v${size / 2}) — ${ticked} of ${ms.length} ticked${relevant ? '' : ' <span class="muted">(not the room size)</span>'}</summary><table>${rows}</table></details>`;
+  }).join('') || '<span class="muted">no maps</span>';
+  $('#mapSummary').textContent = sizes.map(s => `${mapState.maps.filter(m => matchesFilters(m, s) && !mapState.excluded.has(m.baseFilePath)).length + mapState.maps.filter(m => !inFilters(m) && mapState.extra.has(m.baseFilePath) && m.maxPlayers === s).length} maps in the ${s / 2}v${s / 2} pool`).join(', ');
+}
+function tickShown(on) {
+  const q = $('#mapFilter').value.trim().toLowerCase();
+  document.querySelectorAll('#mapList details[open]').forEach(d => {
+    const size = +d.dataset.size;
+    mapState.maps.filter(m => m.maxPlayers === size && (!q || m.name.toLowerCase().includes(q) || (m.author ?? '').toLowerCase().includes(q))).forEach(m => {
+      if (inFilters(m)) { if (on) mapState.excluded.delete(m.baseFilePath); else mapState.excluded.add(m.baseFilePath); }
+      else if (on) mapState.extra.add(m.baseFilePath); else mapState.extra.delete(m.baseFilePath);
+    });
+  });
+  renderMapList();
+}
+async function resetMapStats() {
+  if (!mapState.roomId) { toast('save the room first'); return; }
+  if (!confirm('Forget how often each map was played or voted away in this room?')) return;
+  await post(`api/rooms/${mapState.roomId}/mapstats/reset`); await loadMapList();
+}
+['f_maxPlayers', 'f_auto3v3', 'f_teamMaps'].forEach(id => $('#' + id).addEventListener('change', renderMapList));
+$('#f_mode').addEventListener('change', loadMapList);
+
 async function saveRoom(e) {
   e.preventDefault();
   const opts = {}; $('#f_options').value.split('\n').map(l => l.trim()).filter(Boolean).forEach(l => { const i = l.indexOf('='); if (i > 0) opts[l.slice(0, i).trim()] = l.slice(i + 1).trim(); });
@@ -289,7 +365,8 @@ async function saveRoom(e) {
     maxIdentAgeDays: +$('#f_maxAge').value, minIdentAgeDays: +$('#f_minAge').value, useHostAsFallback: $('#f_hostFallback').checked, kickMessage: $('#f_kickMessage').value || null,
     allowInvites: $('#f_invites').checked, inviteDays: +$('#f_inviteDays').value, maxInvitesPerDay: +$('#f_inviteMax').value,
     gameMode: $('#f_mode').value, maxPlayers: +$('#f_maxPlayers').value, minPlayersToStart: +$('#f_minStart').value, requireTeamStartMappings: $('#f_teamMaps').checked,
-    maps: $('#f_maps').value.split('\n').map(s => s.trim()).filter(Boolean), idleMapRotateMinutes: +$('#f_idle').value,
+    autoThreeVsThree: $('#f_auto3v3').checked, autoThreeVsThreeLobbyUsers: +$('#f_auto3v3Users').value, nextMapPenalty: +$('#f_nextPenalty').value, maxSpectators: +$('#f_spectators').value,
+    maps: [...mapState.extra], excludedMaps: [...mapState.excluded], idleMapRotateMinutes: +$('#f_idle').value,
     tunnel: { mode: $('#f_tunnelMode').value, preferred: $('#f_tunnelPref').value.split(',').map(s => s.trim()).filter(Boolean) }, gameOptions: opts, enabled: $('#f_enabled').checked };
   try {
     if (def.id) await post(`api/rooms/${def.id}?restart=${$('#f_restart').checked ? 1 : 0}`, def, 'PUT'); else await post('api/rooms', def);

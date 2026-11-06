@@ -25,6 +25,10 @@ public sealed class Player
     public string? InvitedBy { get; set; }
     /// <summary>Times this player un-readied while a start countdown was running.</summary>
     public int CancelledStarts { get; set; }
+    /// <summary>Joined while the player slots were full: must pick Spectator by this time or be removed.</summary>
+    public DateTime? MustSpectateBy { get; set; }
+    /// <summary>Last time the bot refused this spectator's attempt to take a player slot (throttles the chat line).</summary>
+    public DateTime? PlayRefusedAt { get; set; }
 
     /// <summary>PO packing: team | start &lt;&lt; 8 | color &lt;&lt; 16 | side &lt;&lt; 24.</summary>
     public int PackedOptions => TeamId | StartingLocation << 8 | ColorId << 16 | SideId << 24;

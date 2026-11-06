@@ -100,8 +100,32 @@ public sealed class GameRoom
     /// <summary>Set after an abandoned launch: the owner should close this room and open a fresh one at this time.</summary>
     public DateTime? RecreateAt { get; private set; }
     private readonly List<string> _recentMaps = new();
-    private readonly List<MapEntry> _mapChoices;
     private bool _roomJoined;
+    private DateTime _lastFormatCheck = DateTime.MinValue;
+
+    /// <summary>Current room size: Def.MaxPlayers, or 6 while the automatic 3v3 switch is active.</summary>
+    public int MaxPlayers { get; private set; }
+    /// <summary>Whether the room is currently enlarged to 3v3 by the lobby-size rule.</summary>
+    public bool ThreeVsThreeActive => Def.AutoThreeVsThree && MaxPlayers == 6 && Def.MaxPlayers != 6;
+    /// <summary>Players needed to start: the full room when the setting asks for a full room, else the configured number.</summary>
+    private int MinPlayersToStart => Math.Max(1, Def.MinPlayersToStart >= Def.MaxPlayers ? MaxPlayers : Def.MinPlayersToStart);
+    /// <summary>Room title as broadcast: the configured name with "2v2" turned into "3v3" while enlarged.</summary>
+    public string RoomName => MaxPlayers == Def.MaxPlayers
+        ? Def.Name
+        : Def.Name.Replace($"{Def.MaxPlayers / 2}v{Def.MaxPlayers / 2}", $"{MaxPlayers / 2}v{MaxPlayers / 2}", StringComparison.OrdinalIgnoreCase);
+    /// <summary>People in the main CnCNet chat channel, as far as this connection's NAMES/JOIN/QUIT tracking knows.</summary>
+    public int LobbyUsers => _irc.Channels.TryGetValue(_chatChannel, out var ch) ? ch.Users.Count : 0;
+
+    // Spectators pick "Spectator" in the side list like in any room; they sit in extra seats beyond the player slots.
+    private bool IsSpectator(Player p) => p.SideId == _layout.SpectatorSideId;
+    private int Humans => Players.Count(p => !IsSpectator(p));
+    private int Spectators => Players.Count(IsSpectator);
+    private int SpectatorSeats => Math.Clamp(Def.MaxSpectators, 0, 8 - MaxPlayers);
+    /// <summary>Everyone who can be in the room at once: player slots plus spectator seats.</summary>
+    private int Capacity => MaxPlayers + SpectatorSeats;
+    private const int SpectateGraceSeconds = 30;
+    /// <summary>!mappick votes: map section name -> voters.</summary>
+    private readonly Dictionary<string, HashSet<string>> _mapVotes = new(StringComparer.OrdinalIgnoreCase);
 
     public GameRoom(RoomConfig def, IrcClient irc, TunnelList tunnels, IdentPolicy policy, MapPoolFile pool,
         OptionLayout layout, BotDb db, ClientDialect dialect, string game)
@@ -118,8 +142,8 @@ public sealed class GameRoom
         _chatChannel = $"#cncnet-{game.ToLowerInvariant()}";
         _broadcastChannel = $"#cncnet-{game.ToLowerInvariant()}-games";
         Options = new OptionValues(layout);
-        _mapChoices = pool.Select(def);
-        if (_mapChoices.Count == 0)
+        MaxPlayers = def.MaxPlayers;
+        if (pool.Select(def, def.MaxPlayers).Count == 0)
             throw new InvalidOperationException($"{def.Name}: no maps match the room filters");
         TunnelMode = def.Tunnel.Mode.ToLowerInvariant() switch
         {
@@ -133,6 +157,9 @@ public sealed class GameRoom
 
     // ---- lifecycle ---------------------------------------------------------------------------
 
+    /// <summary>Starts from the previous room's size so the 3v3 hysteresis carries across a recreation after launch.</summary>
+    public void InheritFormat(GameRoom previous) => MaxPlayers = previous.MaxPlayers;
+
     /// <summary>Creates the IRC channel for the room. The IRC client must be registered and in the broadcast channel.</summary>
     public async Task OpenAsync(CancellationToken ct)
     {
@@ -145,12 +172,14 @@ public sealed class GameRoom
             : Def.Password;
         CreatedAt = DateTime.UtcNow;
         _emptySince = CreatedAt;
+        MaxPlayers = DesiredMaxPlayers();
+        _lastSettings = SettingsString(); // what joiners already know from the game list; only changes are sent
         PickNextMap();
         Seed = _rng.Next();
         GameId = NewGameId();
         _irc.MessageReceived += OnIrcMessage;
 
-        Log.Info(Tag, $"creating {Channel} \"{Def.Name}\" map {Map!.Name} mode {Mode!.Name} tunnel {TunnelMode}{(StaticTunnel is null ? "" : " " + StaticTunnel)}");
+        Log.Info(Tag, $"creating {Channel} \"{RoomName}\" ({MaxPlayers / 2}v{MaxPlayers / 2}, lobby {LobbyUsers} users) map {Map!.Name} mode {Mode!.Name} tunnel {TunnelMode}{(StaticTunnel is null ? "" : " " + StaticTunnel)}");
         await _irc.SendNowAsync($"JOIN {Channel} {Password}", ct);
 
         var deadline = DateTime.UtcNow.AddSeconds(30);
@@ -160,7 +189,7 @@ public sealed class GameRoom
             throw new IOException($"{Def.Nick}: could not join {Channel}");
 
         // What the client sends from OnJoined(): the user limit counts the bot itself.
-        _irc.Queue($"MODE {Channel} +klnNs {Password} {Def.MaxPlayers + 1}", 50);
+        _irc.Queue($"MODE {Channel} +klnNs {Password} {Capacity + 1}", 50);
         _irc.Queue($"TOPIC {Channel} :{_dialect.Revision};{_game.ToLowerInvariant()}", 50);
         _db.LogEvent(Def.Id, "room_open", null, null, null, $"{Channel} {Map!.Name}");
     }
@@ -210,11 +239,18 @@ public sealed class GameRoom
                 Broadcast();
             }
 
+            if (Players.Count == 0 && CurrentMatchId is null && now - _lastFormatCheck >= TimeSpan.FromSeconds(30))
+            {
+                _lastFormatCheck = now;
+                ReconsiderFormat();
+            }
+
             if (CurrentMatchId is not null)
                 CheckMatchEnd(now);
             else
             {
                 MaintainNegotiations(now);
+                EnforceSpectatorGrace(now);
                 KickUnready(now);
                 TryLaunch(now);
             }
@@ -298,6 +334,10 @@ public sealed class GameRoom
                 nick = _irc.Nick,
                 channel = Channel,
                 tier = Def.Tier.ToString(),
+                roomName = RoomName,
+                maxPlayers = MaxPlayers,
+                threeVsThree = ThreeVsThreeActive,
+                lobbyUsers = LobbyUsers,
                 map = Map?.Name,
                 mapPath = Map?.BaseFilePath,
                 mode = Mode?.Name,
@@ -316,6 +356,7 @@ public sealed class GameRoom
                 {
                     p.Nick, p.Ident, p.Host, p.SideId, p.ColorId, p.StartingLocation, p.TeamId,
                     p.Ready, p.AutoReady, p.HashReceived, p.IsInGame, p.JoinedAt, p.ReadyWarnedAt, p.InvitedBy,
+                    spectator = IsSpectator(p), p.MustSpectateBy,
                 }).ToList(),
                 negotiations = TunnelMode == TunnelMode.V3Dynamic
                     ? Negotiations.Pairs(Players.Select(p => p.Nick).ToList()).Select(x => new { x.a, x.b, status = x.status.ToString(), ping = Negotiations.PairPing(x.a, x.b) }).ToList()
@@ -436,7 +477,7 @@ public sealed class GameRoom
             return;
         }
 
-        if (Players.Count >= Def.MaxPlayers || Players.Count >= 8)
+        if (Players.Count >= Capacity || Players.Count >= 8)
         {
             Log.Info(Tag, $"room full, kicking {nick}");
             _ = _irc.SendNowAsync($"KICK {Channel} {nick}");
@@ -444,8 +485,11 @@ public sealed class GameRoom
         }
 
         var p = new Player { Nick = nick, Ident = ident, Host = host, InvitedBy = verdict.Whitelist is { IsInvite: true } w ? w.AddedBy : null };
+        bool playersFull = Humans >= MaxPlayers;
+        if (playersFull)
+            p.MustSpectateBy = DateTime.UtcNow.AddSeconds(SpectateGraceSeconds);
         Players.Add(p);
-        Log.Info(Tag, $"join {nick} ({ident}@{host}): {verdict.Reason}; {identInfo}; {Players.Count}/{Def.MaxPlayers}");
+        Log.Info(Tag, $"join {nick} ({ident}@{host}): {verdict.Reason}; {identInfo}; {Humans}/{MaxPlayers}{(Spectators > 0 || playersFull ? $" +{Spectators} spectators" : "")}");
         _db.LogEvent(Def.Id, "join", nick, ident, host, verdict.Reason);
 
         // Joining does not un-ready the others (the stock host does not either); the newcomer just has to ready up.
@@ -453,8 +497,10 @@ public sealed class GameRoom
         SendPlayerOptions();
         SendPlayerExtraOptions(force: true);
         if (Players.Count == 1)
-            SendChat($"Hi {nick}, I am the host bot. Pick a spot and press Ready; the game starts when {Math.Max(1, Def.MinPlayersToStart)} players are ready. Type !help for commands.");
-        if (Players.Count >= Def.MaxPlayers)
+            SendChat($"Hi {nick}, I am the host bot. Pick a spot and press Ready; the game starts when {MinPlayersToStart} players are ready. Type !help for commands.");
+        else if (playersFull)
+            SendChat($"{nick}: the player slots are taken. Choose Spectator in the side list within {SpectateGraceSeconds} seconds to watch, or you will be removed.", UrgentChatPriority);
+        if (Players.Count >= Capacity)
             SetLocked(true);
         _lastBroadcast = DateTime.MinValue; // refresh the list entry promptly
     }
@@ -472,11 +518,13 @@ public sealed class GameRoom
         Players.Remove(p);
         Negotiations.RemovePlayer(p.Nick);
         _fullCountdownShown = false;
-        Log.Info(Tag, $"{how}: {p.Nick}; {Players.Count}/{Def.MaxPlayers}");
+        Log.Info(Tag, $"{how}: {p.Nick}; {Humans}/{MaxPlayers}{(Spectators > 0 ? $" +{Spectators} spectators" : "")}");
+        if (Humans <= MaxPlayers)
+            foreach (var x in Players) x.MustSpectateBy = null; // the slots are no longer over-subscribed; late joiners may keep theirs
         SendPlayerOptions();
         if (Players.Count == 0)
             _emptySince = DateTime.UtcNow;
-        if (Locked && CurrentMatchId is null && Players.Count < Def.MaxPlayers)
+        if (Locked && CurrentMatchId is null && Players.Count < Capacity)
             SetLocked(false);
         _lastBroadcast = DateTime.MinValue;
     }
@@ -555,12 +603,37 @@ public sealed class GameRoom
         if (side > 0 && side < _layout.SideCount && side >= _layout.RandomSelectorCount && disallowed.Contains(side - _layout.RandomSelectorCount))
             return;
 
+        bool wantsSpectator = side == _layout.SpectatorSideId;
+        if (wantsSpectator)
+        {
+            start = 0;
+            team = 0;
+            p.MustSpectateBy = null;
+        }
+        else if (IsSpectator(p) || p.MustSpectateBy is not null)
+        {
+            // A spectator (or a late joiner who still has to become one) may only take a player slot while one is free.
+            if (Humans >= MaxPlayers)
+            {
+                if (p.PlayRefusedAt is null || DateTime.UtcNow - p.PlayRefusedAt.Value > TimeSpan.FromSeconds(10))
+                {
+                    p.PlayRefusedAt = DateTime.UtcNow;
+                    SendChat($"{p.Nick}: all {MaxPlayers} player slots are taken, you can only spectate right now.", UrgentChatPriority);
+                }
+                SendPlayerOptions(); // put their side list back
+                return;
+            }
+            p.MustSpectateBy = null;
+            Log.Info(Tag, $"{p.Nick} switches from spectator to player");
+        }
         if (ActiveMapping is not null)
             team = 0; // teams follow start positions; the clients' team drop-down is disabled anyway
-        if (_forceRandomSides)
+        if (_forceRandomSides && !wantsSpectator)
             side = 0;
         // Unlike the stock host, a spot/side/colour change does not un-ready anyone: players may
         // adjust during the countdown and the game starts with whatever they chose.
+        if (wantsSpectator != IsSpectator(p))
+            _lastBroadcast = DateTime.MinValue; // the game list's player count includes spectators; refresh it now
         p.SideId = side;
         p.ColorId = color;
         p.StartingLocation = start;
@@ -578,8 +651,13 @@ public sealed class GameRoom
         switch (cmd)
         {
             case "!help":
-                SendChat("Commands: !map (current map), !next (vote to change the map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle an option for this game), !rules"
-                         + (Def.AllowInvites && Def.Tier != RoomTier.Open ? ", !invite <nick> (let a player in who the ident check would refuse)." : "."));
+                SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle an option), !rules"
+                         + (Def.AllowInvites && Def.Tier != RoomTier.Open ? ", !invite <nick> (let a player in who the ident check would refuse)" : "")
+                         + (SpectatorSeats > 0 ? ". To watch, choose Spectator in the side list." : "."));
+                break;
+            case "!mappick" when p is not null && CurrentMatchId is null:
+                if (DateTime.UtcNow - _mapChangedAt >= TimeSpan.FromSeconds(5))
+                    HandleMapPick(p, text.Length > cmd.Length ? text[(cmd.Length + 1)..].Trim() : "");
                 break;
             case "!invite" when p is not null:
                 HandleInvite(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
@@ -588,7 +666,7 @@ public sealed class GameRoom
                 HandleVote(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
                 break;
             case "!map":
-                SendChat($"Map: {Map?.Name} ({Mode?.Name}), {Players.Count}/{Def.MaxPlayers} players. Game starts when everyone is ready.");
+                SendChat($"Map: {Map?.Name} ({Mode?.Name}), {Humans}/{MaxPlayers} players{(Spectators > 0 ? $" + {Spectators} spectating" : "")}. Game starts when everyone is ready.");
                 break;
             case "!rules":
                 SendChat(Def.Tier switch
@@ -608,6 +686,8 @@ public sealed class GameRoom
                 if (votes >= needed)
                 {
                     foreach (var x in Players) x.WantsNextMap = false;
+                    if (Map is not null)
+                        _db.BumpMapStat(Def.Id, Map.BaseFilePath, skip: true); // ranks the map a little lower for future picks
                     PickNextMap();
                     ClearReadyStatuses();
                     SendGameOptions();
@@ -620,6 +700,83 @@ public sealed class GameRoom
                     SendChat($"{nick} wants a different map ({votes}/{needed} votes).");
                 break;
             }
+        }
+    }
+
+    /// <summary>"!mappick &lt;part of a name&gt;": half the room voting for the same pool map switches to it.</summary>
+    private void HandleMapPick(Player p, string query)
+    {
+        if (query.Length == 0)
+        {
+            SendChat("Usage: !mappick <part of the map name> - half the room voting for the same map switches to it.");
+            return;
+        }
+        static string Norm(string s)
+        {
+            s = s.Trim().ToLowerInvariant();
+            if (s.StartsWith('[') && s.IndexOf(']') is > 0 and var i) s = s[(i + 1)..].Trim(); // "[4] Tour of Egypt" -> "tour of egypt"
+            return s;
+        }
+        string q = Norm(query);
+        var pool = MapChoices();
+        var matches = pool.Where(m => Norm(m.Name).Contains(q)).ToList();
+        if (matches.Count == 0)
+        {
+            SendChat($"No {MaxPlayers / 2}v{MaxPlayers / 2} map in this room's pool matches \"{query}\".");
+            return;
+        }
+        // Best match wins without asking (the pool has duplicate names such as two "[4] Stronghold"):
+        // exact name, then a name starting with the query, then the shortest name, then pool order.
+        var map = matches
+            .Select((m, i) => (m, i))
+            .OrderByDescending(x => Norm(x.m.Name) == q)
+            .ThenByDescending(x => Norm(x.m.Name).StartsWith(q))
+            .ThenBy(x => x.m.Name.Length)
+            .ThenBy(x => x.i)
+            .First().m;
+        if (Map is not null && map.BaseFilePath == Map.BaseFilePath)
+        {
+            SendChat($"{map.Name} is the current map.");
+            return;
+        }
+        foreach (var voters in _mapVotes.Values) voters.Remove(p.Nick); // one map vote per player
+        if (!_mapVotes.TryGetValue(map.BaseFilePath, out var set))
+            _mapVotes[map.BaseFilePath] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        set.Add(p.Nick);
+        int needed = Math.Max(1, (Players.Count + 1) / 2);
+        if (set.Count < needed)
+        {
+            SendChat($"{p.Nick} votes for {map.Name} ({set.Count}/{needed}). Type !mappick {Norm(map.Name)} to agree.");
+            return;
+        }
+        foreach (var x in Players) x.WantsNextMap = false;
+        ApplyMap(map);
+        ClearReadyStatuses();
+        SendGameOptions();
+        SendPlayerOptions();
+        SendPlayerExtraOptions();
+        SendChat($"Map changed to {Map!.Name} by vote.");
+        _db.LogEvent(Def.Id, "mappick", p.Nick, p.Ident, p.Host, map.Name);
+        _lastBroadcast = DateTime.MinValue;
+    }
+
+    /// <summary>Removes late joiners who neither became spectators nor got a player slot within the grace period.</summary>
+    private void EnforceSpectatorGrace(DateTime now)
+    {
+        foreach (var p in Players.ToList())
+        {
+            if (p.MustSpectateBy is not { } by || IsSpectator(p) || now < by)
+                continue;
+            if (Humans <= MaxPlayers) // their own slot counts: only remove while the slots are over-subscribed
+            {
+                p.MustSpectateBy = null;
+                continue;
+            }
+            Log.Info(Tag, $"removing {p.Nick}: player slots full and did not choose Spectator");
+            _db.LogEvent(Def.Id, "kick_full", p.Nick, p.Ident, p.Host, "did not choose Spectator while the player slots were full");
+            SendPrivateMessage(p.Nick, "The player slots were full and you did not choose Spectator. You are welcome to rejoin when a slot is free.");
+            _ = _irc.SendNowAsync($"KICK {Channel} {p.Nick}");
+            RemovePlayer(p, "kicked (no spectator choice)");
         }
     }
 
@@ -739,7 +896,7 @@ public sealed class GameRoom
 
         // Same CTCP the client's "Invite" context-menu item sends; the password is only given for password rooms,
         // the client derives the key for the others itself.
-        string body = $"INVITE {Channel};{Def.Name}" + (string.IsNullOrEmpty(Def.Password) ? "" : ";" + Password);
+        string body = $"INVITE {Channel};{RoomName}" + (string.IsNullOrEmpty(Def.Password) ? "" : ";" + Password);
         _irc.Queue($"PRIVMSG {target.Nick} :\x01{body}\x01", 1);
         _recentInvites[target.Nick] = inviter.Nick;
         _db.LogEvent(Def.Id, "invite", inviter.Nick, inviter.Ident, inviter.Host, $"{target.Nick} ({ident}){(verdict.Allowed ? ", already allowed" : $", whitelisted {days} days")}");
@@ -809,10 +966,31 @@ public sealed class GameRoom
         foreach (var p in Players)
             sb.Append(p.Nick).Append(';').Append(p.PackedOptions).Append(';').Append(p.ReadyStatus(mapInvalid: Map is null)).Append(';');
         _irc.SendCtcp(Channel, sb.ToString(), 11, "PO");
+        SendGameSettingsIfChanged();
     }
 
+    /// <summary>
+    /// The client's GSETTINGS (room name; player limit; skill level; custom password): clients draw
+    /// "limit" slots as free and the rest as unavailable, and they learned the limit from the game list
+    /// when they joined. Spectators sit beyond the player slots, so the limit grows with them.
+    /// </summary>
+    private string? _lastSettings;
+
+    private string SettingsString() =>
+        $"GSETTINGS {RoomName.Replace(";", "")};{MaxPlayers + Spectators};{Math.Clamp(Def.SkillLevel, 0, 3)};{(string.IsNullOrEmpty(Def.Password) ? 0 : 1)}";
+
+    private void SendGameSettingsIfChanged()
+    {
+        string s = SettingsString();
+        if (s == _lastSettings) return;
+        _lastSettings = s;
+        if (Players.Count > 0)
+            _irc.SendCtcp(Channel, s, 11, "GSETTINGS");
+    }
+
+    /// <summary>The map's two-team layout for the current room size (2v2 or 3v3), when auto-ally is on.</summary>
     private TeamStartMapping? ActiveMapping =>
-        Def.UseTeamStartMappings && Map is { TeamStartMappings.Count: > 0 } ? Map.TeamStartMappings[0] : null;
+        Def.UseTeamStartMappings && Map is not null ? MapPoolFile.TeamMapping(Map, MaxPlayers / 2) : null;
 
     /// <summary>Auto-ally: bit 5 on and the map's first team layout, so each start position carries its team.</summary>
     private string? _lastPeo;
@@ -869,7 +1047,7 @@ public sealed class GameRoom
     /// <summary>Warns, then kicks, players who stay not-ready while the room is full. Paused while tunnels are still being sorted out.</summary>
     private void KickUnready(DateTime now)
     {
-        if (Def.KickUnreadySeconds <= 0 || Players.Count < Def.MaxPlayers || TunnelsUnresolved())
+        if (Def.KickUnreadySeconds <= 0 || Humans < MaxPlayers || TunnelsUnresolved())
         {
             foreach (var p in Players) { p.UnreadySince = null; p.ReadyWarnedAt = null; }
             return;
@@ -964,9 +1142,9 @@ public sealed class GameRoom
         {
             _dialect.Revision,
             _dialect.GameVersion,
-            Def.MaxPlayers.ToString(),
+            (MaxPlayers + Spectators).ToString(), // the list shows players.Count/this; spectators are in the list too
             Channel,
-            Def.Name.Replace(";", ""),
+            RoomName.Replace(";", ""),
             $"{(Locked ? 1 : 0)}{(string.IsNullOrEmpty(Def.Password) ? 0 : 1)}{(closed ? 1 : 0)}00",
             string.Join(",", Players.Select(p => p.Nick)),
             Map?.Name ?? "",
@@ -984,28 +1162,104 @@ public sealed class GameRoom
 
     // ---- maps ------------------------------------------------------------------------------------
 
+    /// <summary>The room's map pool for its current size; falls back to the plain filters if the admin excluded everything.</summary>
+    private List<MapEntry> MapChoices()
+    {
+        var choices = _pool.Select(Def, MaxPlayers);
+        if (choices.Count == 0)
+        {
+            Log.Warn(Tag, $"no maps left in the pool for {MaxPlayers} players after exclusions; using every map that matches the filters");
+            choices = _pool.Maps.Where(m => MapPoolFile.MatchesFilters(m, Def, MaxPlayers)).ToList();
+        }
+        if (choices.Count == 0)
+            choices = _pool.Maps.Where(m => m.MaxPlayers == MaxPlayers && m.GameModes.Contains(Def.GameMode, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (choices.Count == 0)
+            choices = _pool.Maps.Where(m => m.MaxPlayers == MaxPlayers).ToList();
+        if (choices.Count == 0)
+            throw new InvalidOperationException($"no {MaxPlayers}-player maps in the pool");
+        return choices;
+    }
+
+    /// <summary>Pick weight of a map from its !next history: 1 / (1 + penalty * max(0, skips - plays / 2)), never below 0.2.</summary>
+    public static double MapWeight(double penalty, BotDb.MapStat? stat)
+    {
+        if (penalty <= 0 || stat is null) return 1;
+        double net = Math.Max(0, stat.Skips - stat.Plays / 2.0);
+        return Math.Max(0.2, 1 / (1 + penalty * net));
+    }
+
+    /// <summary>Random map from the pool, avoiding the last few and preferring maps players have not voted away.</summary>
     private void PickNextMap()
     {
-        var candidates = _mapChoices.Where(m => !_recentMaps.Contains(m.BaseFilePath)).ToList();
+        var choices = MapChoices();
+        var candidates = choices.Where(m => !_recentMaps.Contains(m.BaseFilePath)).ToList();
         if (candidates.Count == 0)
         {
             _recentMaps.Clear();
-            candidates = _mapChoices;
+            candidates = choices;
         }
-        ApplyMap(candidates[_rng.Next(candidates.Count)]);
+        var stats = Def.NextMapPenalty > 0 ? _db.LoadMapStats(Def.Id) : new Dictionary<string, BotDb.MapStat>();
+        var weights = candidates.Select(m => MapWeight(Def.NextMapPenalty, stats.GetValueOrDefault(m.BaseFilePath))).ToList();
+        double roll = _rng.NextDouble() * weights.Sum();
+        int pick = candidates.Count - 1;
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            roll -= weights[i];
+            if (roll < 0) { pick = i; break; }
+        }
+        ApplyMap(candidates[pick], choices.Count);
+    }
+
+    /// <summary>
+    /// Size the room should have now: 6 while the lobby is busy and the automatic 3v3 rule is on,
+    /// otherwise the configured size. Dropping back needs the lobby 10% below the threshold so a
+    /// lobby hovering at the threshold does not flip the room every check.
+    /// </summary>
+    private int DesiredMaxPlayers()
+    {
+        if (!Def.AutoThreeVsThree || Def.MaxPlayers >= 6)
+            return Def.MaxPlayers;
+        int users = LobbyUsers, threshold = Math.Max(1, Def.AutoThreeVsThreeLobbyUsers);
+        bool big = MaxPlayers == 6 ? users > threshold * 0.9 : users > threshold;
+        return big ? 6 : Def.MaxPlayers;
+    }
+
+    /// <summary>Applies a size change (settings edit or lobby-size rule) while the room is empty.</summary>
+    private void ReconsiderFormat()
+    {
+        int wanted = DesiredMaxPlayers();
+        if (wanted == MaxPlayers) return;
+        if (_pool.Select(Def, wanted).Count == 0)
+        {
+            Log.Warn(Tag, $"cannot switch to {wanted} players: no maps in the pool for that size");
+            return;
+        }
+        Log.Info(Tag, $"room size {MaxPlayers} -> {wanted} ({wanted / 2}v{wanted / 2}; lobby {LobbyUsers} users, threshold {Def.AutoThreeVsThreeLobbyUsers}, auto {Def.AutoThreeVsThree})");
+        _db.LogEvent(Def.Id, "format", null, null, null, $"{MaxPlayers} -> {wanted} players, lobby {LobbyUsers} users");
+        MaxPlayers = wanted;
+        _lastSettings = SettingsString(); // the room is empty; the next joiner reads the new limit from the game list
+        _recentMaps.Clear();
+        _irc.Queue($"MODE {Channel} +l {Capacity + 1}", 50);
+        PickNextMap();
+        SendGameOptions();
+        SendPlayerExtraOptions();
+        Broadcast();
     }
 
     private DateTime _mapChangedAt = DateTime.MinValue;
 
-    private void ApplyMap(MapEntry map)
+    private void ApplyMap(MapEntry map) => ApplyMap(map, MapChoices().Count);
+
+    private void ApplyMap(MapEntry map, int poolSize)
     {
         Map = map;
         _mapChangedAt = DateTime.UtcNow;
         _votes.Clear();
+        _mapVotes.Clear();
         _forceRandomSides = false;
         _fullCountdownShown = false;
         _recentMaps.Add(map.BaseFilePath);
-        while (_recentMaps.Count > Math.Min(10, _mapChoices.Count - 1))
+        while (_recentMaps.Count > Math.Min(10, poolSize - 1))
             _recentMaps.RemoveAt(0);
 
         Options.Reset();
@@ -1022,9 +1276,9 @@ public sealed class GameRoom
 
     private void TryLaunch(DateTime now)
     {
-        int minPlayers = Math.Max(1, Def.MinPlayersToStart);
+        int minPlayers = MinPlayersToStart;
         var humans = Players.Where(p => p.SideId != _layout.SpectatorSideId).ToList();
-        if (Players.Count < minPlayers || Players.Any(p => p.IsInGame) || !Players.All(p => p.Ready) || humans.Count < Math.Min(2, minPlayers))
+        if (humans.Count < minPlayers || Players.Any(p => p.IsInGame) || !Players.All(p => p.Ready) || humans.Count < Math.Min(2, minPlayers))
         {
             CancelCountdown();
             return;
@@ -1144,7 +1398,7 @@ public sealed class GameRoom
             {
                 _lastLaunchNotice = DateTime.UtcNow;
                 SendChat("Could not start the game: " + ex.Message);
-                SetLocked(Players.Count >= Def.MaxPlayers);
+                SetLocked(Players.Count >= Capacity);
             }
             return;
         }
@@ -1160,7 +1414,8 @@ public sealed class GameRoom
                 p.IsInGame = true;
                 p.StartedAt = MatchStartedAt;
             }
-            CurrentMatchId = _db.StartMatch(Def.Id, Def.Name, Map!, Mode!.Name, GameId, Seed, TunnelMode.ToString(), StaticTunnel?.Endpoint, roster);
+            CurrentMatchId = _db.StartMatch(Def.Id, RoomName, Map!, Mode!.Name, GameId, Seed, TunnelMode.ToString(), StaticTunnel?.Endpoint, roster);
+            _db.BumpMapStat(Def.Id, Map!.BaseFilePath, skip: false);
             Log.Info(Tag, $"LAUNCH match {CurrentMatchId}: {Map.Name} with {string.Join(", ", roster.Select(p => p.Nick))}");
             _db.LogEvent(Def.Id, "launch", null, null, null, $"{Map.Name}: {string.Join(", ", roster.Select(p => p.Nick))}");
             _lastBroadcast = DateTime.MinValue;
@@ -1200,7 +1455,7 @@ public sealed class GameRoom
         SendGameOptions();
         SendPlayerOptions();
         SendPlayerExtraOptions();
-        SetLocked(Players.Count >= Def.MaxPlayers);
+        SetLocked(Players.Count >= Capacity);
         if (Players.Count > 0)
             SendChat($"Next map: {Map!.Name}. Ready up when you want to play again.");
         _lastBroadcast = DateTime.MinValue;

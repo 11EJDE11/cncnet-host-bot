@@ -122,7 +122,9 @@ public sealed class RoomHost
                     if (room.RecreateAt is { } at && at <= DateTime.UtcNow)
                     {
                         await room.CloseAsync("abandoned after launch", announceClosed: false);
+                        var previous = room;
                         room = new GameRoom(Def, irc, _tunnels, _policy, _pool, _layout, _db, dialect, game);
+                        room.InheritFormat(previous);
                         Room = room;
                         await room.OpenAsync(ct);
                     }

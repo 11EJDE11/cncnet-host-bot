@@ -39,6 +39,9 @@ public sealed class BotDb : IDisposable
             CREATE TABLE IF NOT EXISTS whitelist (
                 ident TEXT NOT NULL, room TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, added_by TEXT, reason TEXT,
                 expires TEXT, created_at TEXT NOT NULL, PRIMARY KEY (ident, room));
+            CREATE TABLE IF NOT EXISTS map_stats (
+                room TEXT NOT NULL, map TEXT NOT NULL, plays INTEGER NOT NULL DEFAULT 0, skips INTEGER NOT NULL DEFAULT 0,
+                last_played TEXT, last_skipped TEXT, PRIMARY KEY (room, map));
             """);
     }
 
@@ -157,6 +160,54 @@ public sealed class BotDb : IDisposable
             cmd.Parameters.AddWithValue("$ident", ident);
             cmd.Parameters.AddWithValue("$since", since.ToString("o"));
             return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    // ---- map stats: how often each map was launched or voted away per room ----
+
+    public sealed record MapStat(int Plays, int Skips, DateTime? LastPlayed, DateTime? LastSkipped);
+
+    public Dictionary<string, MapStat> LoadMapStats(string room)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "SELECT map, plays, skips, last_played, last_skipped FROM map_stats WHERE room = $room";
+            cmd.Parameters.AddWithValue("$room", room);
+            using var r = cmd.ExecuteReader();
+            var map = new Dictionary<string, MapStat>(StringComparer.OrdinalIgnoreCase);
+            while (r.Read())
+                map[r.GetString(0)] = new MapStat(r.GetInt32(1), r.GetInt32(2),
+                    r.IsDBNull(3) ? null : DateTime.Parse(r.GetString(3), null, System.Globalization.DateTimeStyles.RoundtripKind),
+                    r.IsDBNull(4) ? null : DateTime.Parse(r.GetString(4), null, System.Globalization.DateTimeStyles.RoundtripKind));
+            return map;
+        }
+    }
+
+    /// <summary>Counts one launch (skip = false) or one passed !next vote (skip = true) against a map in a room.</summary>
+    public void BumpMapStat(string room, string map, bool skip)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = skip
+                ? "INSERT INTO map_stats (room, map, skips, last_skipped) VALUES ($room, $map, 1, $t) ON CONFLICT(room, map) DO UPDATE SET skips = skips + 1, last_skipped = $t"
+                : "INSERT INTO map_stats (room, map, plays, last_played) VALUES ($room, $map, 1, $t) ON CONFLICT(room, map) DO UPDATE SET plays = plays + 1, last_played = $t";
+            cmd.Parameters.AddWithValue("$room", room);
+            cmd.Parameters.AddWithValue("$map", map);
+            cmd.Parameters.AddWithValue("$t", Now);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public void ResetMapStats(string room)
+    {
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "DELETE FROM map_stats WHERE room = $room";
+            cmd.Parameters.AddWithValue("$room", room);
+            cmd.ExecuteNonQuery();
         }
     }
 

@@ -144,10 +144,14 @@ public sealed class RoomManager
             throw new ArgumentException("nick must be 1-15 IRC-safe characters and not start with a digit or '-'");
         if (string.IsNullOrWhiteSpace(def.Name) || def.Name.Length > 23)
             throw new ArgumentException("room name must be 1-23 characters");
-        if (def.MaxPlayers is < 2 or > 8)
-            throw new ArgumentException("maxPlayers must be 2-8");
-        if (_pool.Select(def).Count == 0)
-            throw new ArgumentException("no maps match the room's game mode / player count filters");
+        if (def.MaxPlayers is < 2 or > 8 || def.MaxPlayers % 2 != 0)
+            throw new ArgumentException("maxPlayers must be 2, 4, 6 or 8 (two equal teams)");
+        if (_pool.Select(def, def.MaxPlayers).Count == 0)
+            throw new ArgumentException($"no maps in the pool for {def.MaxPlayers} players (check the game mode, team-layout filter and ticked maps)");
+        if (def.AutoThreeVsThree && _pool.Select(def, 6).Count == 0)
+            throw new ArgumentException("automatic 3v3 is on but no 6-player maps are in the pool");
+        if (def.NextMapPenalty is < 0 or > 10)
+            throw new ArgumentException("nextMapPenalty must be between 0 and 10");
     }
 
     private static void EnsureId(RoomConfig def)
