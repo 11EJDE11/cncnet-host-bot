@@ -114,4 +114,4 @@ tunnels (only in V2 mode) and ICMP (optional, for tunnel ranking). Example syste
 | `tunnel.preferred` | name/country fragments tried in order for the static modes |
 | `gameOptions` | check box / drop-down overrides by control name, e.g. `chkCrates=true`, `cmbCredits=3` |
 
-In-room chat commands for players: `!map`, `!next` (vote for a random other map), `!mappick <part of a name>` (half the room voting for the same map switches to it), `!vote <option>`, `!rules`, `!help`, `!invite <nick>` where enabled.
+In-room chat commands for players: `!map`, `!next` (vote for a random other map), `!mappick <part of a name>` (half the room voting for the same map switches to it), `!vote <option> [option ...]` (each option is its own vote; `!vote sw france` casts two), `!rules`, `!help`, `!invite <nick>` where enabled.

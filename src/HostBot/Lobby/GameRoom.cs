@@ -681,7 +681,7 @@ public sealed class GameRoom
         switch (cmd)
         {
             case "!help":
-                SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle an option), !rules"
+                SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle options, several at once: !vote sw france), !rules"
                          + (Def.AllowInvites && Def.Tier != RoomTier.Open ? ", !invite <nick> (let a player in who the ident check would refuse)" : "")
                          + (SpectatorSeats > 0 ? ". To watch, choose Spectator in the side list." : "."));
                 break;
@@ -693,7 +693,7 @@ public sealed class GameRoom
                 HandleInvite(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
                 break;
             case "!vote" when p is not null && CurrentMatchId is null:
-                HandleVote(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
+                HandleVote(p, text.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToList());
                 break;
             case "!map":
                 SendChat($"Map: {Map?.Name} ({Mode?.Name}), {Humans}/{MaxPlayers} players{(Spectators > 0 ? $" + {Spectators} spectating" : "")}. Game starts when everyone is ready.");
@@ -810,45 +810,72 @@ public sealed class GameRoom
         }
     }
 
-    private void HandleVote(Player p, string? option)
+    /// <summary>"!vote sw france yuri": every option counts as its own vote; one chat line reports them all.</summary>
+    private void HandleVote(Player p, IReadOnlyList<string> options)
     {
         if (Def.VotesNeeded <= 0)
         {
             SendChat("Voting is off in this room.");
             return;
         }
-        var opt = VoteOptions.FirstOrDefault(v => v.name.Equals(option ?? "", StringComparison.OrdinalIgnoreCase));
-        if (opt.name is null)
+        var chosen = new List<(string name, string label, string control, string onValue, string offValue)>();
+        var unknown = new List<string>();
+        foreach (var option in options)
         {
-            SendChat("Vote options: " + string.Join(", ", VoteOptions.Select(v => $"!vote {v.name} ({v.label} {(IsVoteOptionOn(v) ? "on" : "off")})")) + $". {Def.VotesNeeded} votes flip an option for this game.");
+            var opt = VoteOptions.FirstOrDefault(v => v.name.Equals(option, StringComparison.OrdinalIgnoreCase));
+            if (opt.name is null) unknown.Add(option);
+            else if (!chosen.Contains(opt)) chosen.Add(opt);
+        }
+        if (chosen.Count == 0)
+        {
+            SendChat("Vote options: " + string.Join(", ", VoteOptions.Select(v => $"!vote {v.name} ({v.label} {(IsVoteOptionOn(v) ? "on" : "off")})")) + $". {Def.VotesNeeded} votes flip an option for this game; several at once: !vote sw france.");
             return;
         }
-        if (!_votes.TryGetValue(opt.name, out var voters))
-            _votes[opt.name] = voters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        voters.Add(p.Nick);
-        bool turnOn = !IsVoteOptionOn(opt);
+
         int needed = Math.Min(Def.VotesNeeded, Players.Count);
-        if (voters.Count < needed)
+        var tally = new List<string>();
+        var passed = new List<string>();
+        foreach (var opt in chosen)
         {
-            SendChat($"{p.Nick} votes to turn {opt.label} {(turnOn ? "on" : "off")} ({voters.Count}/{needed}).");
-            return;
+            if (!_votes.TryGetValue(opt.name, out var voters))
+                _votes[opt.name] = voters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            voters.Add(p.Nick);
+            bool turnOn = !IsVoteOptionOn(opt);
+            string change = $"{opt.label} {(turnOn ? "on" : "off")}";
+            if (voters.Count < needed)
+            {
+                tally.Add($"{change} ({voters.Count}/{needed})");
+                continue;
+            }
+            voters.Clear();
+            if (opt.control == "peoForceRandomSides")
+            {
+                _forceRandomSides = turnOn;
+                if (turnOn)
+                    foreach (var x in Players) x.SideId = 0;
+                SendPlayerExtraOptions();
+            }
+            else
+                Options.Apply(new[] { new KeyValuePair<string, string>(opt.control, turnOn ? opt.onValue : opt.offValue) }, "vote");
+            passed.Add(change);
+            _db.LogEvent(Def.Id, "vote", p.Nick, p.Ident, p.Host, $"{opt.name} {(turnOn ? "on" : "off")}");
         }
-        voters.Clear();
-        if (opt.control == "peoForceRandomSides")
+
+        if (passed.Count > 0)
         {
-            _forceRandomSides = turnOn;
-            if (turnOn)
-                foreach (var x in Players) x.SideId = 0;
-            SendPlayerExtraOptions();
+            ClearReadyStatuses();
+            SendGameOptions();
+            SendPlayerOptions();
+            _lastBroadcast = DateTime.MinValue;
         }
-        else
-            Options.Apply(new[] { new KeyValuePair<string, string>(opt.control, turnOn ? opt.onValue : opt.offValue) }, "vote");
-        ClearReadyStatuses();
-        SendGameOptions();
-        SendPlayerOptions();
-        SendChat($"Vote passed: {opt.label} {(turnOn ? "on" : "off")} for this game. Ready up again.");
-        _db.LogEvent(Def.Id, "vote", p.Nick, p.Ident, p.Host, $"{opt.name} {(turnOn ? "on" : "off")}");
-        _lastBroadcast = DateTime.MinValue;
+        var line = new StringBuilder();
+        if (passed.Count > 0)
+            line.Append($"Vote passed: {string.Join(", ", passed)} for this game. Ready up again.");
+        if (tally.Count > 0)
+            line.Append(line.Length > 0 ? " " : "").Append($"{p.Nick} votes to turn {string.Join(", ", tally)}.");
+        if (unknown.Count > 0)
+            line.Append($" Unknown: {string.Join(", ", unknown)} (options: {string.Join(" ", VoteOptions.Select(v => v.name))}).");
+        SendChat(line.ToString());
     }
 
     // ---- !invite: a player who passed the ident check vouches for someone the check would refuse ----
