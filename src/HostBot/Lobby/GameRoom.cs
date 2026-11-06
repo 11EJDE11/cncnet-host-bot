@@ -133,6 +133,18 @@ public sealed class GameRoom
     private int SpectatorSeats => Math.Clamp(Def.MaxSpectators, 0, 8 - MaxPlayers);
     /// <summary>Everyone who can be in the room at once: player slots plus spectator seats.</summary>
     private int Capacity => MaxPlayers + SpectatorSeats;
+    /// <summary>
+    /// Invite-only as soon as the player slots are taken, not only when the spectator seats are too:
+    /// a fifth person joining while the four are ready cancels the countdown and puts the start at
+    /// their mercy. Spectators can therefore only come in while a player slot is still free.
+    /// </summary>
+    private bool ShouldBeLocked => Humans >= MaxPlayers || Players.Count >= Capacity;
+
+    private void UpdateLock()
+    {
+        if (CurrentMatchId is null)
+            SetLocked(ShouldBeLocked);
+    }
     private const int SpectateGraceSeconds = 30;
     /// <summary>!mappick votes: map section name -> voters.</summary>
     private readonly Dictionary<string, HashSet<string>> _mapVotes = new(StringComparer.OrdinalIgnoreCase);
@@ -514,8 +526,7 @@ public sealed class GameRoom
             SendChat($"Hi {nick}, I am the host bot. Pick a spot and press Ready; the game starts when {MinPlayersToStart} players are ready. Type !help for commands.");
         else if (playersFull)
             SendChat($"{nick}: the player slots are taken. Choose Spectator in the side list within {SpectateGraceSeconds} seconds to watch, or you will be removed.", UrgentChatPriority);
-        if (Players.Count >= Capacity)
-            SetLocked(true);
+        UpdateLock();
     }
 
     private void OnUserLeft(string? nick, string how)
@@ -537,8 +548,7 @@ public sealed class GameRoom
         SendPlayerOptions();
         if (Players.Count == 0)
             _emptySince = DateTime.UtcNow;
-        if (Locked && CurrentMatchId is null && Players.Count < Capacity)
-            SetLocked(false);
+        UpdateLock();
         _lastBroadcast = DateTime.MinValue;
     }
 
@@ -658,6 +668,7 @@ public sealed class GameRoom
         p.StartingLocation = start;
         p.TeamId = team;
         SendPlayerOptions();
+        UpdateLock(); // a player turning spectator frees a slot; a spectator taking one fills the room
     }
 
     // ---- chat --------------------------------------------------------------------------------
@@ -1446,7 +1457,7 @@ public sealed class GameRoom
             {
                 _lastLaunchNotice = DateTime.UtcNow;
                 SendChat("Could not start the game: " + ex.Message);
-                SetLocked(Players.Count >= Capacity);
+                UpdateLock();
             }
             return;
         }
@@ -1503,7 +1514,7 @@ public sealed class GameRoom
         SendGameOptions();
         SendPlayerOptions();
         SendPlayerExtraOptions();
-        SetLocked(Players.Count >= Capacity);
+        UpdateLock();
         if (Players.Count > 0)
             SendChat($"Next map: {Map!.Name}. Ready up when you want to play again.");
         _lastBroadcast = DateTime.MinValue;

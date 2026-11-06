@@ -108,7 +108,7 @@ tunnels (only in V2 mode) and ICMP (optional, for tunnel ranking). Example syste
 | `autoThreeVsThree`, `autoThreeVsThreeLobbyUsers` | enlarge the room to 3v3 while the lobby channel has more than N users; switches only while the room is empty and drops back 10% below N |
 | `nextMapPenalty` | each passed `!next` lowers that map's pick weight in this room: 1 / (1 + penalty × max(0, skips − plays/2)), never below 0.2 |
 | `minPlayersToStart` | launch as soon as this many are present and all are ready (equal to `maxPlayers` = a full room, also when enlarged to 3v3) |
-| `maxSpectators` | extra seats for people who pick Spectator in the side list; someone joining a room whose player slots are taken has 30 s to pick Spectator, and a spectator can take a player slot again only while one is free |
+| `maxSpectators` | extra seats for people who pick Spectator in the side list. The room goes invite-only as soon as the player slots are taken, so spectators can only join while a player slot is still free; anyone who slips in as the slots fill has 30 s to pick Spectator, and a spectator can take a player slot again only while one is free |
 | `idleMapRotateMinutes` | change map after this long with nobody in the room |
 | `tunnel.mode` | `V3Dynamic` (per-pair best tunnel, recommended), `V3` (one host-picked tunnel), `V2` |
 | `tunnel.preferred` | name/country fragments tried in order for the static modes |
