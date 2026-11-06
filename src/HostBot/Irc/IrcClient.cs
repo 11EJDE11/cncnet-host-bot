@@ -213,8 +213,8 @@ public sealed class IrcClient : IAsyncDisposable
     public void SendCtcp(string channel, string payload, int priority = 0, string? coalesceKey = null, Action<TimeSpan>? onSent = null)
         => Queue($"NOTICE {channel} :\x01{payload}\x01", priority, coalesceKey, onSent);
 
-    public void SendChat(string channel, string text, int colorId = 10, int priority = 0)
-        => Queue($"PRIVMSG {channel} :\x03{colorId:D2}{text}", priority);
+    public void SendChat(string channel, string text, int colorId = 10, int priority = 0, Action<TimeSpan>? onSent = null)
+        => Queue($"PRIVMSG {channel} :\x03{colorId:D2}{text}", priority, null, onSent);
 
     public void SendPrivateMessage(string nick, string text) => Queue($"PRIVMSG {nick} :{text}", 0);
 

@@ -30,8 +30,12 @@ public sealed class ClientDialect
 public sealed class GameRoom
 {
     private const int LaunchNoticePriority = 0;
-    /// <summary>Countdown, cancel and ready-warning lines jump ahead of chat so they are not seconds late.</summary>
-    private const int UrgentChatPriority = 5;
+    /// <summary>
+    /// Countdown, cancel and ready-warning lines go ahead of everything, PO included: a "kicked in
+    /// 12 seconds" that queues behind a vote's GO, PO and GAME lines reaches the player with half
+    /// the fuse gone. One short chat line costs a join's PO at most 2.5 s, and such lines are rare.
+    /// </summary>
+    private const int UrgentChatPriority = 23;
     /// <summary>The GAME list broadcast; below the lobby state lines, a few seconds late in the list costs nothing.</summary>
     private const int BroadcastPriority = 20;
     /// <summary>GO, PEO, GSETTINGS and the channel lock go ahead of the broadcast and all chat.</summary>
@@ -301,9 +305,9 @@ public sealed class GameRoom
 
     // ---- admin actions -------------------------------------------------------------------------
 
-    public void SendChat(string text, int priority = 0)
+    public void SendChat(string text, int priority = 0, Action<TimeSpan>? onSent = null)
     {
-        _irc.SendChat(Channel, text, priority: priority);
+        _irc.SendChat(Channel, text, priority: priority, onSent: onSent);
         _db.LogChat(Def.Id, Channel, _irc.Nick, null, text, outgoing: true);
     }
 
@@ -724,7 +728,6 @@ public sealed class GameRoom
                     SendPlayerOptions();
                     SendPlayerExtraOptions();
                     SendChat($"Map changed to {Map!.Name}.");
-                    _lastBroadcast = DateTime.MinValue;
                 }
                 else
                     SendChat($"{nick} wants a different map ({votes}/{needed} votes).");
@@ -787,7 +790,6 @@ public sealed class GameRoom
         SendPlayerExtraOptions();
         SendChat($"Map changed to {Map!.Name} by vote.");
         _db.LogEvent(Def.Id, "mappick", p.Nick, p.Ident, p.Host, map.Name);
-        _lastBroadcast = DateTime.MinValue;
     }
 
     /// <summary>Removes late joiners who neither became spectators nor got a player slot within the grace period.</summary>
@@ -866,7 +868,6 @@ public sealed class GameRoom
             ClearReadyStatuses();
             SendGameOptions();
             SendPlayerOptions();
-            _lastBroadcast = DateTime.MinValue;
         }
         var line = new StringBuilder();
         if (passed.Count > 0)
@@ -1165,7 +1166,19 @@ public sealed class GameRoom
         }
         if (toWarn.Count > 0)
         {
-            SendChat($"{string.Join(", ", toWarn.Select(p => p.Nick))} you are not ready. Please ready up so the game can begin, or you will be kicked in {Def.KickUnreadySeconds} seconds.", UrgentChatPriority);
+            // The fuse runs from the moment the warning actually leaves, not from when it was queued.
+            SendChat($"{string.Join(", ", toWarn.Select(p => p.Nick))} you are not ready. Please ready up so the game can begin, or you will be kicked in {Def.KickUnreadySeconds} seconds.", UrgentChatPriority,
+                queued =>
+                {
+                    lock (_gate)
+                    {
+                        var sent = DateTime.UtcNow;
+                        foreach (var p in toWarn)
+                            if (p.ReadyWarnedAt is not null && !p.Ready) p.ReadyWarnedAt = sent;
+                    }
+                    if (queued.TotalMilliseconds > 1000)
+                        Log.Info(Tag, $"ready warning left the queue after {queued.TotalMilliseconds:F0} ms");
+                });
         }
     }
 
@@ -1425,7 +1438,18 @@ public sealed class GameRoom
                     _countdownEndsAt = now.AddSeconds(Def.StartDelaySeconds);
                     _countdownAnnounced = true;
                     _fullCountdownShown = true;
-                    SendChat($"Everyone is ready. The game starts in {Def.StartDelaySeconds} seconds - change your spot, side or colour now if you want.", UrgentChatPriority);
+                    // The countdown the players see starts when the line reaches them, so the launch waits for the line.
+                    SendChat($"Everyone is ready. The game starts in {Def.StartDelaySeconds} seconds - change your spot, side or colour now if you want.", UrgentChatPriority,
+                        queued =>
+                        {
+                            lock (_gate)
+                            {
+                                if (_countdownEndsAt is not null && _countdownAnnounced)
+                                    _countdownEndsAt = DateTime.UtcNow.AddSeconds(Def.StartDelaySeconds);
+                            }
+                            if (queued.TotalMilliseconds > 1000)
+                                Log.Info(Tag, $"countdown line left the queue after {queued.TotalMilliseconds:F0} ms");
+                        });
                 }
                 return;
             }
