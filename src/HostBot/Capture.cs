@@ -12,7 +12,7 @@ namespace HostBot;
 /// </summary>
 public static class Capture
 {
-    public static async Task<int> RunAsync(BotConfig cfg, string? hostNick, CancellationToken ct)
+    public static async Task<int> RunAsync(BotConfig cfg, string? hostNick, string? password, CancellationToken ct)
     {
         string game = cfg.Irc.Game;
         string broadcast = $"#cncnet-{game.ToLowerInvariant()}-games";
@@ -56,7 +56,7 @@ public static class Capture
                 }
                 roomChannel = target.Channel;
                 string key = target.Flags.Length > 1 && target.Flags[1] == '1'
-                    ? throw new InvalidOperationException("room has a custom password")
+                    ? password ?? throw new InvalidOperationException("room has a custom password; pass it as the third argument")
                     : Convert.ToHexStringLower(SHA1.HashData(Encoding.UTF8.GetBytes(target.Channel)))[..10];
                 Console.WriteLine($"joining {target.Channel} ({target.Name})");
                 await irc.SendNowAsync($"JOIN {target.Channel} {key}", ct);

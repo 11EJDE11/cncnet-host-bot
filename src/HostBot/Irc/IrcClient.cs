@@ -100,6 +100,9 @@ public sealed class IrcClient : IAsyncDisposable
         public string Line = "";
         public string? CoalesceKey;
         public bool Cancelled;
+        public DateTime EnqueuedAt;
+        /// <summary>Called after the line went out, with the time it spent in the queue.</summary>
+        public Action<TimeSpan>? OnSent;
     }
 
     /// <summary>Connects to the first reachable server and completes once numeric 001 arrives.</summary>
@@ -182,25 +185,33 @@ public sealed class IrcClient : IAsyncDisposable
         }
     }
 
+    /// <summary>How long the flood budget still has to recover before this line could be written now (≤ 0: right away).</summary>
+    private double BudgetWaitSeconds(string line)
+    {
+        double cost = 2.0 + Encoding.UTF8.GetByteCount(line + "\r\n") / 120.0;
+        double now = NowSeconds;
+        return Math.Max(_floodSince, now) + cost - now - FloodBurstSeconds;
+    }
+
     /// <summary>
     /// Queues a line. Higher priority goes first; equal priority is FIFO. A non-null coalesce key
     /// replaces a still-queued line with the same key (the client does this for GAME, PO, GO...).
     /// </summary>
-    public void Queue(string line, int priority = 0, string? coalesceKey = null)
+    public void Queue(string line, int priority = 0, string? coalesceKey = null, Action<TimeSpan>? onSent = null)
     {
         lock (_queueGate)
         {
             if (coalesceKey is not null && _coalesce.TryGetValue(coalesceKey, out var old))
                 old.Cancelled = true;
-            var q = new QueuedLine { Line = line, CoalesceKey = coalesceKey };
+            var q = new QueuedLine { Line = line, CoalesceKey = coalesceKey, EnqueuedAt = DateTime.UtcNow, OnSent = onSent };
             if (coalesceKey is not null)
                 _coalesce[coalesceKey] = q;
             _queue.Enqueue(q, (-priority, _queueSeq++));
         }
     }
 
-    public void SendCtcp(string channel, string payload, int priority = 0, string? coalesceKey = null)
-        => Queue($"NOTICE {channel} :\x01{payload}\x01", priority, coalesceKey);
+    public void SendCtcp(string channel, string payload, int priority = 0, string? coalesceKey = null, Action<TimeSpan>? onSent = null)
+        => Queue($"NOTICE {channel} :\x01{payload}\x01", priority, coalesceKey, onSent);
 
     public void SendChat(string channel, string text, int colorId = 10, int priority = 0)
         => Queue($"PRIVMSG {channel} :\x03{colorId:D2}{text}", priority);
@@ -214,12 +225,18 @@ public sealed class IrcClient : IAsyncDisposable
             while (!ct.IsCancellationRequested)
             {
                 QueuedLine? next = null;
+                double wait = 0;
                 lock (_queueGate)
                 {
-                    while (_queue.Count > 0)
+                    // A line leaves the queue only once the flood budget can take it. While it
+                    // waits it stays replaceable, so a newer line with the same coalesce key (the
+                    // PO after a second join) goes out instead of the stale one followed by it.
+                    while (_queue.TryPeek(out var q, out _))
                     {
-                        var q = _queue.Dequeue();
-                        if (q.Cancelled) continue;
+                        if (q.Cancelled) { _queue.Dequeue(); continue; }
+                        wait = BudgetWaitSeconds(q.Line);
+                        if (wait > 0) break;
+                        _queue.Dequeue();
                         if (q.CoalesceKey is not null && _coalesce.TryGetValue(q.CoalesceKey, out var cur) && cur == q)
                             _coalesce.Remove(q.CoalesceKey);
                         next = q;
@@ -228,10 +245,15 @@ public sealed class IrcClient : IAsyncDisposable
                 }
                 if (next is null)
                 {
-                    await Task.Delay(20, ct);
+                    await Task.Delay(wait > 0 ? (int)Math.Clamp(wait * 1000, 20, 100) : 20, ct);
                     continue;
                 }
                 await SendNowAsync(next.Line, ct);
+                if (next.OnSent is { } onSent)
+                {
+                    try { onSent(DateTime.UtcNow - next.EnqueuedAt); }
+                    catch (Exception ex) { Log.Warn(Tag, $"{Nick}: send callback failed: {ex.Message}"); }
+                }
                 await Task.Delay(SendGap, ct);
             }
         }

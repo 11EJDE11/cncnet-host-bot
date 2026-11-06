@@ -23,9 +23,14 @@ public sealed class NegotiationMatrix
         return BinaryPrimitives.ReadUInt32LittleEndian(hash);
     }
 
-    /// <summary>Parses "hex8:status[:ping]|..." from <paramref name="sender"/>. Unknown ids are ignored.</summary>
-    public void ApplyReport(string sender, string payload, IReadOnlyDictionary<uint, string> idToName)
+    /// <summary>
+    /// Parses "hex8:status[:ping]|..." from <paramref name="sender"/>. Unknown ids are ignored.
+    /// Returns the directional statuses that changed, for the log.
+    /// </summary>
+    public List<(string target, NegotiationStatus before, NegotiationStatus after, int? ping)> ApplyReport(
+        string sender, string payload, IReadOnlyDictionary<uint, string> idToName)
     {
+        var changes = new List<(string, NegotiationStatus, NegotiationStatus, int?)>();
         foreach (var entry in payload.Split('|', StringSplitOptions.RemoveEmptyEntries))
         {
             var p = entry.Split(':');
@@ -34,13 +39,22 @@ public sealed class NegotiationMatrix
             if (!idToName.TryGetValue(id, out var target)) continue;
             if (!int.TryParse(p[1], out int s) || s < 0 || s > 3) continue;
             var key = (sender, target);
-            _status[key] = (NegotiationStatus)s;
+            var before = _status.GetValueOrDefault(key, NegotiationStatus.NotStarted);
+            var after = (NegotiationStatus)s;
+            _status[key] = after;
             _updated[key] = DateTime.UtcNow;
+            int? reportedPing = null;
             if (p.Length >= 3 && int.TryParse(p[2], out int ping))
+            {
                 _ping[key] = ping;
+                reportedPing = ping;
+            }
             else
                 _ping.Remove(key);
+            if (before != after)
+                changes.Add((target, before, after, reportedPing));
         }
+        return changes;
     }
 
     public void RemovePlayer(string name)

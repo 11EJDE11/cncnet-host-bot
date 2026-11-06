@@ -30,8 +30,18 @@ public sealed class ClientDialect
 public sealed class GameRoom
 {
     private const int LaunchNoticePriority = 0;
-    /// <summary>Countdown, cancel and ready-warning lines jump ahead of the PO/GO traffic so they are not seconds late.</summary>
+    /// <summary>Countdown, cancel and ready-warning lines jump ahead of chat so they are not seconds late.</summary>
     private const int UrgentChatPriority = 5;
+    /// <summary>The GAME list broadcast; below the lobby state lines, a few seconds late in the list costs nothing.</summary>
+    private const int BroadcastPriority = 20;
+    /// <summary>GO, PEO, GSETTINGS and the channel lock go ahead of the broadcast and all chat.</summary>
+    private const int GameOptionsPriority = 21;
+    /// <summary>
+    /// PO goes first of all: a newcomer starts its tunnel negotiations only when the host's PO arrives,
+    /// while the others started theirs on the JOIN and give it only 10 s, so every second a PO sits
+    /// behind other lines is a second towards a failed pair.
+    /// </summary>
+    private const int PlayerOptionsPriority = 22;
 
     /// <summary>Live settings; swapped by RoomHost.Update so policy and timing changes apply at once.</summary>
     public RoomConfig Def { get; set; }
@@ -493,8 +503,12 @@ public sealed class GameRoom
         _db.LogEvent(Def.Id, "join", nick, ident, host, verdict.Reason);
 
         // Joining does not un-ready the others (the stock host does not either); the newcomer just has to ready up.
-        SendGameOptions();
+        // PO first: it is what lets the newcomer start negotiating tunnels with everyone (the client
+        // takes the tunnel mode from the GAME broadcast, so it does not need the GO for that).
+        // The list entry is left to the 30 s broadcast timer; a GAME line here would eat the flood
+        // budget the next joiner's PO needs.
         SendPlayerOptions();
+        SendGameOptions();
         SendPlayerExtraOptions(force: true);
         if (Players.Count == 1)
             SendChat($"Hi {nick}, I am the host bot. Pick a spot and press Ready; the game starts when {MinPlayersToStart} players are ready. Type !help for commands.");
@@ -502,7 +516,6 @@ public sealed class GameRoom
             SendChat($"{nick}: the player slots are taken. Choose Spectator in the side list within {SpectateGraceSeconds} seconds to watch, or you will be removed.", UrgentChatPriority);
         if (Players.Count >= Capacity)
             SetLocked(true);
-        _lastBroadcast = DateTime.MinValue; // refresh the list entry promptly
     }
 
     private void OnUserLeft(string? nick, string how)
@@ -548,6 +561,7 @@ public sealed class GameRoom
                 bool wasReady = p.Ready;
                 p.Ready = ready > 0;
                 p.AutoReady = ready > 1;
+                Log.Info(Tag, $"R {ready} from {sender}: ready {wasReady}->{p.Ready}, auto {p.AutoReady}{(_countdownEndsAt is not null ? ", during countdown" : "")}{(p.UnreadySince is not null ? $", unready since {p.UnreadySince:HH:mm:ss}" : "")}");
                 if (wasReady && !p.Ready && _countdownEndsAt is not null)
                     NoteCancelledStart(p);
                 SendPlayerOptions();
@@ -568,8 +582,13 @@ public sealed class GameRoom
                     SendPlayerOptions();
                 break;
             case "NEGRPT" when p is not null:
-                Negotiations.ApplyReport(sender, arg, IdTable());
+            {
+                var changes = Negotiations.ApplyReport(sender, arg, IdTable());
+                if (changes.Count > 0)
+                    Log.Info(Tag, $"NEGRPT {sender}: " + string.Join(", ", changes.Select(c =>
+                        $"->{c.target} {c.before}->{c.after}{(c.ping is { } ms ? $" {ms} ms" : "")} (pair {Negotiations.PairStatus(sender, c.target)})")));
                 break;
+            }
             case "MAPREQ":
             case "MAPFAIL":
             case "MAPSDISABLED":
@@ -957,15 +976,23 @@ public sealed class GameRoom
         parts.Add(((int)TunnelMode).ToString());
         if (_dialect.GoHasDifficulty)
             parts.Add("-1");
-        _irc.SendCtcp(Channel, "GO " + string.Join(";", parts), 11, "GO");
+        _irc.SendCtcp(Channel, "GO " + string.Join(";", parts), GameOptionsPriority, "GO");
     }
 
     private void SendPlayerOptions()
     {
         var sb = new StringBuilder("PO ");
+        var summary = new StringBuilder();
         foreach (var p in Players)
-            sb.Append(p.Nick).Append(';').Append(p.PackedOptions).Append(';').Append(p.ReadyStatus(mapInvalid: Map is null)).Append(';');
-        _irc.SendCtcp(Channel, sb.ToString(), 11, "PO");
+        {
+            int ready = p.ReadyStatus(mapInvalid: Map is null);
+            sb.Append(p.Nick).Append(';').Append(p.PackedOptions).Append(';').Append(ready).Append(';');
+            summary.Append(summary.Length > 0 ? " " : "").Append(p.Nick).Append('=').Append(ready);
+        }
+        string roster = summary.ToString();
+        // The queue delay is the number that matters for tunnel failures (see PlayerOptionsPriority).
+        _irc.SendCtcp(Channel, sb.ToString(), PlayerOptionsPriority, "PO",
+            queued => Log.Info(Tag, $"PO sent after {queued.TotalMilliseconds:F0} ms in queue: {roster}"));
         SendGameSettingsIfChanged();
     }
 
@@ -985,7 +1012,7 @@ public sealed class GameRoom
         if (s == _lastSettings) return;
         _lastSettings = s;
         if (Players.Count > 0)
-            _irc.SendCtcp(Channel, s, 11, "GSETTINGS");
+            _irc.SendCtcp(Channel, s, GameOptionsPriority, "GSETTINGS");
     }
 
     /// <summary>The map's two-team layout for the current room size (2v2 or 3v3), when auto-ally is on.</summary>
@@ -1005,14 +1032,17 @@ public sealed class GameRoom
         if (!force && peo == _lastPeo)
             return; // every line costs ~2.5 s of GameSurge's per-connection budget; identical PEO carries nothing new
         _lastPeo = peo;
-        _irc.SendCtcp(Channel, peo, 11, "PEO");
+        _irc.SendCtcp(Channel, peo, GameOptionsPriority, "PEO");
     }
 
     /// <summary>
     /// A failed tunnel pair never recovers unless its keepalive comes back, and players rarely
     /// ready up while their client shows a failed negotiation. So, independent of readiness: once a
-    /// pair has been failed for 15 s, ask the clients to redo their negotiations (the host's
-    /// /renegotiate), at most once a minute.
+    /// pair has been failed for 5 s, ask the clients to redo their negotiations (the host's
+    /// /renegotiate), at most once a minute. Like the stock host it holds off while another pair
+    /// is still negotiating (a RENEGALL tears that round down and its stale packets corrupt the
+    /// next one), but not for longer than 30 s, as a one-sided report can leave a pair at
+    /// InProgress for good.
     /// </summary>
     private void MaintainNegotiations(DateTime now)
     {
@@ -1022,21 +1052,27 @@ public sealed class GameRoom
             return;
         }
         var names = Players.Where(p => !p.IsInGame).Select(p => p.Nick).ToList();
-        var failed = Negotiations.Pairs(names).Where(x => x.status == NegotiationStatus.Failed).ToList();
+        var pairs = Negotiations.Pairs(names).ToList();
+        var failed = pairs.Where(x => x.status == NegotiationStatus.Failed).ToList();
         if (failed.Count == 0)
         {
             _failedSince = null;
             return;
         }
         _failedSince ??= now;
-        if (now - _failedSince.Value < TimeSpan.FromSeconds(15) || now - _lastRenegotiate < TimeSpan.FromSeconds(60))
+        var failedFor = now - _failedSince.Value;
+        if (failedFor < TimeSpan.FromSeconds(5) || now - _lastRenegotiate < TimeSpan.FromSeconds(60))
+            return;
+        var inProgress = pairs.Where(x => x.status == NegotiationStatus.InProgress).ToList();
+        if (inProgress.Count > 0 && failedFor < TimeSpan.FromSeconds(30))
             return;
         _lastRenegotiate = now;
         _failedSince = null;
         foreach (var f in failed)
             Negotiations.ResetPair(f.a, f.b);
         _irc.SendCtcp(Channel, "RENEGALL " + string.Join(",", names), 10);
-        Log.Info(Tag, "RENEGALL after failed pairs: " + string.Join(", ", failed.Select(x => $"{x.a}<->{x.b}")));
+        Log.Info(Tag, $"RENEGALL after {failedFor.TotalSeconds:F0} s with failed pairs: " + string.Join(", ", failed.Select(x => $"{x.a}<->{x.b}"))
+            + (inProgress.Count > 0 ? "; still in progress: " + string.Join(", ", inProgress.Select(x => $"{x.a}<->{x.b}")) : ""));
         _db.LogEvent(Def.Id, "renegotiate", null, null, null, string.Join(", ", failed.Select(x => $"{x.a}<->{x.b}")));
     }
 
@@ -1126,14 +1162,16 @@ public sealed class GameRoom
     {
         if (Locked == locked) return;
         Locked = locked;
-        _ = _irc.SendNowAsync($"MODE {Channel} {(locked ? "+i" : "-i")}");
+        // Queued below the PO so the fourth joiner's PO is not held up by the lock line; an
+        // unlock that follows at once simply replaces the queued lock.
+        _irc.Queue($"MODE {Channel} {(locked ? "+i" : "-i")}", GameOptionsPriority, "MODE");
         _lastBroadcast = DateTime.MinValue;
     }
 
     private void Broadcast()
     {
         _lastBroadcast = DateTime.UtcNow;
-        _irc.SendCtcp(_broadcastChannel, BuildGameBroadcast(closed: false), 20, "GAME");
+        _irc.SendCtcp(_broadcastChannel, BuildGameBroadcast(closed: false), BroadcastPriority, "GAME");
     }
 
     private string BuildGameBroadcast(bool closed)
@@ -1280,7 +1318,17 @@ public sealed class GameRoom
         var humans = Players.Where(p => p.SideId != _layout.SpectatorSideId).ToList();
         if (humans.Count < minPlayers || Players.Any(p => p.IsInGame) || !Players.All(p => p.Ready) || humans.Count < Math.Min(2, minPlayers))
         {
-            CancelCountdown();
+            // Name who is holding things up; a fifth person joining mid-countdown is the usual case,
+            // and "everyone" would send the four who are ready looking for a problem of their own.
+            var notReady = Players.Where(p => !p.Ready).Select(p => p.Nick).ToList();
+            string? reason = null;
+            if (notReady.Count > 0)
+            {
+                reason = $"waiting for {string.Join(", ", notReady)} to be ready";
+                if (Players.Any(p => !p.Ready && p.MustSpectateBy is not null))
+                    reason += " (just joined: choose Spectator in the side list, then press Ready)";
+            }
+            CancelCountdown(reason);
             return;
         }
 
@@ -1303,8 +1351,8 @@ public sealed class GameRoom
             var names = Players.Select(p => p.Nick).ToList();
             if (!Negotiations.AllSucceeded(names))
             {
-                CancelCountdown();
                 var pairs = Negotiations.Pairs(names).Where(x => x.status != NegotiationStatus.Succeeded).ToList();
+                CancelCountdown("waiting for tunnel connections: " + string.Join(", ", pairs.Select(x => $"{x.a}-{x.b}")));
                 if (now - _lastLaunchNotice > TimeSpan.FromSeconds(30))
                 {
                     _lastLaunchNotice = now;
@@ -1351,12 +1399,12 @@ public sealed class GameRoom
         _ = LaunchAsync();
     }
 
-    private void CancelCountdown()
+    private void CancelCountdown(string? reason = null)
     {
         if (_countdownEndsAt is null) return;
         _countdownEndsAt = null;
         if (_countdownAnnounced)
-            SendChat("Start cancelled - waiting for everyone to be ready again.", UrgentChatPriority);
+            SendChat($"Start cancelled - {reason ?? "waiting for everyone to be ready again"}.", UrgentChatPriority);
         _countdownAnnounced = false;
     }
 

@@ -10,7 +10,8 @@ public static class Program
         hostbot idents import [config.json]    download / refresh the chat logs into the ident database
         hostbot idents check <ident> [config]  show what the policy knows about an ident
         hostbot maps build <game dir> [out]    build gamedata/maps.json from a game install (INI/MPMaps.ini + Maps/)
-        hostbot capture [host nick] [config]   connect, print GAME broadcasts (client version / field count) and, with a
+        hostbot capture [host nick] [config] [room password]
+                                               connect, print GAME broadcasts (client version / field count) and, with a
                                                host nick, join that room and print its GO/PO/PEO so the option layout can be checked
         options: -v (verbose logging)
         """;
@@ -42,7 +43,7 @@ public static class Program
                     return 0;
 
                 case "capture":
-                    return await Capture.RunAsync(BotConfig.Load(list.Count > 2 ? list[2] : "config.json"), list.Count > 1 ? list[1] : null, cts.Token);
+                    return await Capture.RunAsync(BotConfig.Load(list.Count > 2 ? list[2] : "config.json"), list.Count > 1 ? list[1] : null, list.Count > 3 ? list[3] : null, cts.Token);
 
                 case "help":
                 case "--help":
