@@ -149,7 +149,7 @@ async function refreshStatus() {
   status = await get('api/status');
   if (activeTab() === 'rooms') await loadRoomChats();
   const st = status.idents;
-  $('#identStats').textContent = `Idents: ${st.idents} over ${st.days} days (${st.first ?? '-'}..${st.last ?? '-'})${status.importRunning ? ', import running' : ''}`;
+  $('#identStats').textContent = `Idents: ${st.idents ?? '(counting)'} over ${st.days} days (${st.first ?? '-'}..${st.last ?? '-'})${status.importRunning ? ', import running' : ''}`;
   renderRooms();
   const sel = $('#chatRoom'), sel2 = $('#chatSendRoom');
   const cur = sel.value, cur2 = sel2.value;

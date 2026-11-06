@@ -15,13 +15,16 @@ public sealed record IdentHistory(string Ident, DateOnly FirstSeen, DateOnly Las
 public sealed class IdentStore : IDisposable
 {
     private readonly SqliteConnection _db;
+    private readonly string _connectionString;
     private readonly object _gate = new();
-    private (int idents, int days, DateOnly? first, DateOnly? last)? _stats;
+    private int? _identCount;          // full-table count, computed in the background (minutes on a cold disk)
+    private Task? _identCountTask;
 
     public IdentStore(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
-        _db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = path }.ToString();
+        _db = new SqliteConnection(_connectionString);
         _db.Open();
         Exec("PRAGMA journal_mode=WAL;");
         Exec("""
@@ -185,32 +188,49 @@ public sealed class IdentStore : IDisposable
                 mark.ExecuteNonQuery();
             }
             tx.Commit();
-            _stats = null;
+            _identCount = null;
         }
     }
 
-    /// <summary>Totals over the whole table. Expensive (a full scan), so cached until the next import.</summary>
-    public (int idents, int days, DateOnly? first, DateOnly? last) Stats()
+    /// <summary>
+    /// Totals. Days and the date range come from the imported_files table and the day index (instant);
+    /// the distinct-ident count needs a pass over the whole 1 GB table, so it is computed once in the
+    /// background on its own connection and reported as null until it is ready.
+    /// </summary>
+    public (int? idents, int days, DateOnly? first, DateOnly? last) Stats()
     {
+        int days; DateOnly? first, last;
         lock (_gate)
         {
-            if (_stats is { } cached)
-                return cached;
             using var cmd = _db.CreateCommand();
-            // GROUP BY walks the primary key / day index in order (one pass each); COUNT(DISTINCT) would build
-            // temporary b-trees over 6+ million rows, which took minutes on a cold server disk.
-            cmd.CommandText = """
-                SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM sightings GROUP BY ident)),
-                       (SELECT COUNT(*) FROM (SELECT 1 FROM sightings GROUP BY day)),
-                       (SELECT MIN(day) FROM sightings), (SELECT MAX(day) FROM sightings)
-                """;
+            cmd.CommandText = "SELECT (SELECT COUNT(*) FROM imported_files), (SELECT MIN(day) FROM sightings), (SELECT MAX(day) FROM sightings)";
             using var r = cmd.ExecuteReader();
             r.Read();
-            var result = (r.GetInt32(0), r.GetInt32(1),
-                r.IsDBNull(2) ? (DateOnly?)null : DateOnly.Parse(r.GetString(2)),
-                r.IsDBNull(3) ? (DateOnly?)null : DateOnly.Parse(r.GetString(3)));
-            _stats = result;
-            return result;
+            days = r.GetInt32(0);
+            first = r.IsDBNull(1) ? null : DateOnly.Parse(r.GetString(1));
+            last = r.IsDBNull(2) ? null : DateOnly.Parse(r.GetString(2));
+            if (_identCount is null && (_identCountTask is null || _identCountTask.IsCompleted))
+                _identCountTask = Task.Run(CountIdents);
+            return (_identCount, days, first, last);
+        }
+    }
+
+    private void CountIdents()
+    {
+        try
+        {
+            using var db = new SqliteConnection(_connectionString);
+            db.Open();
+            using var cmd = db.CreateCommand();
+            // GROUP BY walks the primary key in order: one pass, no temporary b-tree.
+            cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM sightings GROUP BY ident)";
+            int n = Convert.ToInt32(cmd.ExecuteScalar());
+            lock (_gate) _identCount = n;
+            Log.Info("idents", $"ident database holds {n} distinct idents");
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("idents", $"ident count failed: {ex.Message}");
         }
     }
 

@@ -33,7 +33,7 @@ public static class Runner
         var importer = new ChatLogImporter(identStore, config.ChatLogs.BaseUrl, http);
 
         var stats = identStore.Stats();
-        Log.Info(Tag, $"ident db: {stats.idents} idents, {stats.days} days ({stats.first:yyyy-MM-dd}..{stats.last:yyyy-MM-dd}); map pool: {pool.Maps.Count} maps");
+        Log.Info(Tag, $"ident db: {stats.days} days imported ({stats.first:yyyy-MM-dd}..{stats.last:yyyy-MM-dd}), ident count follows; map pool: {pool.Maps.Count} maps");
         if (stats.days == 0)
             Log.Warn(Tag, "ident database is empty: run 'hostbot idents import' first, or every policy room will treat everyone as unknown");
 
