@@ -55,7 +55,7 @@
     <div class="row">
       <button class="act" onclick="openRoomForm()">New room</button>
       <span class="muted" id="identStats"></span>
-      <button class="ghost" onclick="post('/api/idents/import').then(()=>toast('import started'))">Refresh ident DB</button>
+      <button class="ghost" onclick="post('api/idents/import').then(()=>toast('import started'))">Refresh ident DB</button>
     </div>
     <div class="grid" id="roomCards"></div>
     <h3>Whitelist</h3>
@@ -101,7 +101,7 @@
     <label><span>Room name (max 23)</span><input id="f_name" maxlength="23" required></label>
     <label><span>Bot nick (max 15)</span><input id="f_nick" maxlength="15" required></label>
     <label><span>Password (empty = none)</span><input id="f_password" maxlength="20"></label>
-    <label><span>Tier</span><select id="f_tier"><option>Open</option><option>Noob</option><option>Pro</option></select></label>
+    <label><span>Tier</span><select id="f_tier"><option value="Open">Open</option><option value="Noob">Beginner</option><option value="Pro">Pro</option></select></label>
     <label><span>Skill level (game list)</span><select id="f_skill"><option value="0">Any</option><option value="1">Beginner</option><option value="2">Intermediate</option><option value="3">Pro</option></select></label>
     <label><span>Start countdown (seconds) / quick restart after a cancel (seconds)</span><input id="f_startDelay" type="number" value="20" style="width:70px"> <input id="f_quickStart" type="number" value="3" style="width:70px"></label>
     <label><span>Kick after un-readying during countdown N times (0 = off)</span><input id="f_kickCancel" type="number" value="3"></label>
@@ -146,7 +146,7 @@ const activeTab = () => document.querySelector('main section.active').id;
 
 let status = null, gameModes = [];
 async function refreshStatus() {
-  status = await get('/api/status');
+  status = await get('api/status');
   if (activeTab() === 'rooms') await loadRoomChats();
   const st = status.idents;
   $('#identStats').textContent = `Idents: ${st.idents} over ${st.days} days (${st.first ?? '-'}..${st.last ?? '-'})${status.importRunning ? ', import running' : ''}`;
@@ -166,7 +166,7 @@ async function refreshStatus() {
 const roomChat = {};
 async function loadRoomChats() {
   await Promise.all(status.rooms.map(async h => {
-    try { roomChat[h.def.id] = await get(`/api/chat?limit=10&room=${encodeURIComponent(h.def.id)}&channel=%23`); } catch { } // newest first
+    try { roomChat[h.def.id] = await get(`api/chat?limit=10&room=${encodeURIComponent(h.def.id)}&channel=%23`); } catch { } // newest first
   }));
 }
 function renderRooms() {
@@ -186,10 +186,10 @@ function renderRooms() {
         <span style="margin-left:auto">
           ${h.running ? `<button class="ghost" onclick="roomAction('${esc(d.id)}','stop')">Stop</button>` : `<button class="act" onclick="roomAction('${esc(d.id)}','start')">Start</button>`}
           <button class="ghost" onclick="openRoomForm('${esc(d.id)}')">Edit</button>
-          <button class="ghost danger" onclick="if(confirm('Delete room ${esc(d.name)}?')) post('/api/rooms/${esc(d.id)}',null,'DELETE').then(refreshStatus)">Delete</button>
+          <button class="ghost danger" onclick="if(confirm('Delete room ${esc(d.name)}?')) post('api/rooms/${esc(d.id)}',null,'DELETE').then(refreshStatus)">Delete</button>
         </span></div>
       ${r ? `<div class="muted">Map: <strong>${esc(r.map)}</strong> (${esc(r.mode)}) · tunnel ${esc(r.tunnelMode)}${r.tunnel ? ' ' + esc(r.tunnel) : ''} · ${r.locked ? 'locked' : 'open'} · ${r.inMatch ? '<span class="warn">match running since ' + ago(r.matchStartedAt) + '</span>' : 'waiting for players'} · up ${ago(r.createdAt)}
-        <button class="ghost" onclick="post('/api/rooms/${esc(d.id)}/nextmap',{}).then(refreshStatus)">Next map</button></div>
+        <button class="ghost" onclick="post('api/rooms/${esc(d.id)}/nextmap',{}).then(refreshStatus)">Next map</button></div>
         <table><tr><th>Player</th><th>Ident</th><th>Ready</th><th>State</th><th>Joined</th><th></th></tr>${players}</table>
         ${neg ? `<div class="muted">Negotiations: ${neg}</div>` : ''}
         <div class="chat small">${chat || '<span class="muted">no chat yet</span>'}</div>
@@ -204,15 +204,15 @@ function renderRooms() {
     if (say && k) { say.value = k.say; if (k.focus) { say.focus(); say.setSelectionRange(say.value.length, say.value.length); } }
   });
 }
-async function roomAction(id, a) { await post(`/api/rooms/${id}/${a}`); setTimeout(refreshStatus, 500); }
-async function kick(id, nick, ban) { const reason = prompt(`Reason shown to ${nick}:`, 'Kicked by an admin.'); if (reason === null) return; await post(`/api/rooms/${id}/kick`, { nick, reason, ban: String(ban) }); setTimeout(refreshStatus, 500); }
-async function sayRoom(id) { const i = $('#say_' + id); if (!i.value.trim()) return; await post(`/api/rooms/${id}/chat`, { text: i.value }); i.value = ''; }
-async function sendChat() { const id = $('#chatSendRoom').value, t = $('#chatText'); if (!id || !t.value.trim()) return; await post(`/api/rooms/${id}/chat`, { text: t.value }); t.value = ''; refreshChat(); }
-async function whitelist() { const ident = $('#wlIdent').value.trim(); if (!ident) return; await post('/api/whitelist', { ident, room: $('#wlRoom').value, days: $('#wlDays').value, reason: $('#wlReason').value }); $('#wlIdent').value = ''; loadWhitelist(); }
-async function unwhitelist(ident, room) { await post('/api/whitelist', { ident, room, remove: '1' }); loadWhitelist(); }
+async function roomAction(id, a) { await post(`api/rooms/${id}/${a}`); setTimeout(refreshStatus, 500); }
+async function kick(id, nick, ban) { const reason = prompt(`Reason shown to ${nick}:`, 'Kicked by an admin.'); if (reason === null) return; await post(`api/rooms/${id}/kick`, { nick, reason, ban: String(ban) }); setTimeout(refreshStatus, 500); }
+async function sayRoom(id) { const i = $('#say_' + id); if (!i.value.trim()) return; await post(`api/rooms/${id}/chat`, { text: i.value }); i.value = ''; }
+async function sendChat() { const id = $('#chatSendRoom').value, t = $('#chatText'); if (!id || !t.value.trim()) return; await post(`api/rooms/${id}/chat`, { text: t.value }); t.value = ''; refreshChat(); }
+async function whitelist() { const ident = $('#wlIdent').value.trim(); if (!ident) return; await post('api/whitelist', { ident, room: $('#wlRoom').value, days: $('#wlDays').value, reason: $('#wlReason').value }); $('#wlIdent').value = ''; loadWhitelist(); }
+async function unwhitelist(ident, room) { await post('api/whitelist', { ident, room, remove: '1' }); loadWhitelist(); }
 function roomName(id) { return id ? (status?.rooms.find(r => r.def.id === id)?.def.name ?? id) : 'all rooms'; }
 async function loadWhitelist() {
-  const w = await get('/api/whitelist');
+  const w = await get('api/whitelist');
   $('#whitelist').innerHTML = w.length ? w.map(e => `<tr><td>${esc(e.ident)}</td><td>${esc(roomName(e.room))}</td><td>${esc(e.kind)}</td><td>${esc(e.addedBy ?? '')}</td><td>${esc(e.reason ?? '')}</td><td>${e.expires ? esc(e.expires.slice(0, 16).replace('T', ' ')) : 'never'}</td><td><button class="ghost" onclick="unwhitelist('${esc(e.ident)}','${esc(e.room)}')">remove</button></td></tr>`).join('') : '<tr><td colspan="7" class="muted">(empty)</td></tr>';
 }
 
@@ -220,7 +220,7 @@ let chatAfter = 0;
 async function refreshChat(reset) {
   if (reset) { chatAfter = 0; $('#chatLog').innerHTML = ''; }
   const room = $('#chatRoom').value, ch = $('#chatChannel').value.trim();
-  const rows = await get(`/api/chat?limit=300${room ? '&room=' + encodeURIComponent(room) : ''}${ch ? '&channel=' + encodeURIComponent(ch) : ''}&after=${chatAfter}`);
+  const rows = await get(`api/chat?limit=300${room ? '&room=' + encodeURIComponent(room) : ''}${ch ? '&channel=' + encodeURIComponent(ch) : ''}&after=${chatAfter}`);
   rows.reverse();
   const box = $('#chatLog');
   const atBottom = reset || box.scrollHeight - box.scrollTop - box.clientHeight < 40;
@@ -233,7 +233,7 @@ async function refreshChat(reset) {
 $('#chatRoom').onchange = () => refreshChat(true); $('#chatChannel').onchange = () => refreshChat(true);
 
 async function refreshMatches() {
-  const rows = await get('/api/matches?limit=200');
+  const rows = await get('api/matches?limit=200');
   $('#matchTable').innerHTML = '<tr><th>Started</th><th>Room</th><th>Map</th><th>Players</th><th>Duration</th><th>End</th><th>Tunnel</th></tr>' + rows.map(m => {
     const ps = JSON.parse(m.players).map(p => esc(p.Nick)).join(', ');
     const dur = m.ended ? Math.round((new Date(m.ended) - new Date(m.started)) / 60000) + ' min' : '<span class="warn">running</span>';
@@ -242,19 +242,19 @@ async function refreshMatches() {
 }
 async function searchIdents() {
   const q = $('#identQuery').value.trim(); if (!q) return;
-  const rows = await get('/api/idents?q=' + encodeURIComponent(q));
+  const rows = await get('api/idents?q=' + encodeURIComponent(q));
   $('#identTable').innerHTML = '<tr><th>Ident</th><th>First seen</th><th>Last seen</th><th>Days</th><th>Last nick</th><th>Host</th><th>Rooms</th></tr>' + rows.map(r =>
     `<tr><td><a href="#" onclick="identDays('${esc(r.ident)}');return false">${esc(r.ident)}</a></td><td>${r.firstSeen}</td><td>${r.lastSeen}</td><td>${r.days}</td><td>${esc(r.lastNick)}</td><td class="muted">${esc(r.lastHost ?? '')}</td><td>${r.verdicts.map(v => `<span class="${v.allowed ? 'good' : 'bad'}" title="${esc(v.reason)}">${esc(v.room)}: ${v.allowed ? 'ok' : 'kick'}</span>`).join('<br>')}</td></tr>`).join('');
 }
 async function identDays(ident) {
-  const days = await get(`/api/idents/${encodeURIComponent(ident)}/days`);
+  const days = await get(`api/idents/${encodeURIComponent(ident)}/days`);
   const box = $('#identDays'); box.style.display = 'block';
   box.innerHTML = `<strong>${esc(ident)}</strong> — ${days.length} days<table><tr><th>Day</th><th>Nick</th><th>Host</th><th>Joins</th></tr>` + days.map(d => `<tr><td>${d.day}</td><td>${esc(d.nick)}</td><td class="muted">${esc(d.host ?? '')}</td><td>${d.joins}</td></tr>`).join('') + '</table>';
 }
 $('#identQuery').onkeydown = e => { if (e.key === 'Enter') searchIdents(); };
 async function refreshEvents() {
   const type = $('#eventType').value;
-  const rows = await get('/api/events?limit=300' + (type ? '&type=' + encodeURIComponent(type) : ''));
+  const rows = await get('api/events?limit=300' + (type ? '&type=' + encodeURIComponent(type) : ''));
   const types = [...new Set(rows.map(r => r.type))];
   const sel = $('#eventType'); if (sel.options.length <= 1) sel.innerHTML += types.map(t => `<option>${esc(t)}</option>`).join('');
   $('#eventTable').innerHTML = '<tr><th>Time</th><th>Room</th><th>Type</th><th>Nick</th><th>Ident</th><th>Host</th><th>Detail</th></tr>' + rows.map(r =>
@@ -268,7 +268,7 @@ function renderLobby() {
 }
 
 async function openRoomForm(id) {
-  if (!gameModes.length) gameModes = await get('/api/gamemodes');
+  if (!gameModes.length) gameModes = await get('api/gamemodes');
   $('#f_mode').innerHTML = gameModes.map(m => `<option>${esc(m)}</option>`).join('');
   const d = id ? status.rooms.find(r => r.def.id === id).def : null;
   $('#roomFormTitle').textContent = d ? 'Edit room' : 'New room';
@@ -292,7 +292,7 @@ async function saveRoom(e) {
     maps: $('#f_maps').value.split('\n').map(s => s.trim()).filter(Boolean), idleMapRotateMinutes: +$('#f_idle').value,
     tunnel: { mode: $('#f_tunnelMode').value, preferred: $('#f_tunnelPref').value.split(',').map(s => s.trim()).filter(Boolean) }, gameOptions: opts, enabled: $('#f_enabled').checked };
   try {
-    if (def.id) await post(`/api/rooms/${def.id}?restart=${$('#f_restart').checked ? 1 : 0}`, def, 'PUT'); else await post('/api/rooms', def);
+    if (def.id) await post(`api/rooms/${def.id}?restart=${$('#f_restart').checked ? 1 : 0}`, def, 'PUT'); else await post('api/rooms', def);
     $('#roomDialog').close(); refreshStatus();
   } catch (err) { /* toast already shown */ }
   return false;

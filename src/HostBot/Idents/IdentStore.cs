@@ -197,7 +197,13 @@ public sealed class IdentStore : IDisposable
             if (_stats is { } cached)
                 return cached;
             using var cmd = _db.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(DISTINCT ident), COUNT(DISTINCT day), MIN(day), MAX(day) FROM sightings";
+            // GROUP BY walks the primary key / day index in order (one pass each); COUNT(DISTINCT) would build
+            // temporary b-trees over 6+ million rows, which took minutes on a cold server disk.
+            cmd.CommandText = """
+                SELECT (SELECT COUNT(*) FROM (SELECT 1 FROM sightings GROUP BY ident)),
+                       (SELECT COUNT(*) FROM (SELECT 1 FROM sightings GROUP BY day)),
+                       (SELECT MIN(day) FROM sightings), (SELECT MAX(day) FROM sightings)
+                """;
             using var r = cmd.ExecuteReader();
             r.Read();
             var result = (r.GetInt32(0), r.GetInt32(1),

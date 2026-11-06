@@ -16,8 +16,8 @@
   "optionLayout": "gamedata/options.json",
   "rooms": [
     {
-      "name": "2v2 Newbies Only",
-      "nick": "NewbieHost",
+      "name": "[AUTO] 2v2 Beginners",
+      "nick": "BeginnerHost",
       "tier": "Noob",
       "skillLevel": 1,
       "maxIdentAgeDays": 150,
@@ -58,7 +58,7 @@
     {
       "id": "midhost",
       "enabled": true,
-      "name": "2v2 Intermediate",
+      "name": "[AUTO] 2v2 Intermediate",
       "nick": "MidHost",
       "password": null,
       "skillLevel": 2,
@@ -98,7 +98,7 @@
       "abandonDelaySeconds": 25
     },
     {
-      "name": "2v2 Pros Only",
+      "name": "[AUTO] 2v2 Pros Only",
       "nick": "ProHost",
       "tier": "Pro",
       "allowInvites": true,
@@ -133,7 +133,7 @@
       "abandonDelaySeconds": 25
     },
     {
-      "name": "Host Bot Test",
+      "name": "[AUTO] Host Bot Test",
       "nick": "HostBotTest",
       "enabled": false,
       "password": "test",

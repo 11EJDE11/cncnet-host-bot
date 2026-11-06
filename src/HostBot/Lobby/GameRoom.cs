@@ -448,10 +448,10 @@ public sealed class GameRoom
         Log.Info(Tag, $"join {nick} ({ident}@{host}): {verdict.Reason}; {identInfo}; {Players.Count}/{Def.MaxPlayers}");
         _db.LogEvent(Def.Id, "join", nick, ident, host, verdict.Reason);
 
-        ClearReadyStatuses();
+        // Joining does not un-ready the others (the stock host does not either); the newcomer just has to ready up.
         SendGameOptions();
         SendPlayerOptions();
-        SendPlayerExtraOptions();
+        SendPlayerExtraOptions(force: true);
         if (Players.Count == 1)
             SendChat($"Hi {nick}, I am the host bot. Pick a spot and press Ready; the game starts when {Math.Max(1, Def.MinPlayersToStart)} players are ready. Type !help for commands.");
         if (Players.Count >= Def.MaxPlayers)
@@ -593,13 +593,15 @@ public sealed class GameRoom
             case "!rules":
                 SendChat(Def.Tier switch
                 {
-                    RoomTier.Noob => $"Newbie room: players whose ident has been seen on CnCNet for more than {Def.MaxIdentAgeDays} days are kicked.",
+                    RoomTier.Noob => $"Beginner room: players whose ident has been seen on CnCNet for more than {Def.MaxIdentAgeDays} days are kicked.",
                     RoomTier.Pro => $"Pro room: players whose ident has been seen on CnCNet for less than {Def.MinIdentAgeDays} days are kicked.",
                     _ => "Open room: anyone may play.",
                 });
                 break;
             case "!next" when p is not null && CurrentMatchId is null:
             {
+                if (DateTime.UtcNow - _mapChangedAt < TimeSpan.FromSeconds(5))
+                    break; // crossed with a map change that was already on its way to the players
                 p.WantsNextMap = true;
                 int votes = Players.Count(x => x.WantsNextMap);
                 int needed = Def.VotesNeeded > 0 ? Math.Min(Def.VotesNeeded, Players.Count) : Players.Count / 2 + 1;
@@ -813,13 +815,19 @@ public sealed class GameRoom
         Def.UseTeamStartMappings && Map is { TeamStartMappings.Count: > 0 } ? Map.TeamStartMappings[0] : null;
 
     /// <summary>Auto-ally: bit 5 on and the map's first team layout, so each start position carries its team.</summary>
-    private void SendPlayerExtraOptions()
+    private string? _lastPeo;
+
+    private void SendPlayerExtraOptions(bool force = false)
     {
         var m = ActiveMapping;
         // Bits: forceRandomSides, forceRandomColors, forceNoTeams, forceRandomStarts, useTeamStartMappings.
         // The client ticks "no teams" together with "use team start mappings"; only that flag disables the team drop-down.
         char rs = _forceRandomSides ? '1' : '0';
-        _irc.SendCtcp(Channel, m is null ? $"PEO {rs}0000;" : $"PEO {rs}0101;{m.Mapping}", 11, "PEO");
+        string peo = m is null ? $"PEO {rs}0000;" : $"PEO {rs}0101;{m.Mapping}";
+        if (!force && peo == _lastPeo)
+            return; // every line costs ~2.5 s of GameSurge's per-connection budget; identical PEO carries nothing new
+        _lastPeo = peo;
+        _irc.SendCtcp(Channel, peo, 11, "PEO");
     }
 
     /// <summary>
@@ -850,7 +858,6 @@ public sealed class GameRoom
         foreach (var f in failed)
             Negotiations.ResetPair(f.a, f.b);
         _irc.SendCtcp(Channel, "RENEGALL " + string.Join(",", names), 10);
-        SendChat("Tunnel connection failed between " + string.Join(", ", failed.Select(x => $"{x.a} and {x.b}")) + " - asking everyone to reconnect their tunnels, please wait a moment.");
         Log.Info(Tag, "RENEGALL after failed pairs: " + string.Join(", ", failed.Select(x => $"{x.a}<->{x.b}")));
         _db.LogEvent(Def.Id, "renegotiate", null, null, null, string.Join(", ", failed.Select(x => $"{x.a}<->{x.b}")));
     }
@@ -988,9 +995,12 @@ public sealed class GameRoom
         ApplyMap(candidates[_rng.Next(candidates.Count)]);
     }
 
+    private DateTime _mapChangedAt = DateTime.MinValue;
+
     private void ApplyMap(MapEntry map)
     {
         Map = map;
+        _mapChangedAt = DateTime.UtcNow;
         _votes.Clear();
         _forceRandomSides = false;
         _fullCountdownShown = false;
