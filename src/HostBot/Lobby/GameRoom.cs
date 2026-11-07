@@ -305,8 +305,18 @@ public sealed class GameRoom
 
     // ---- admin actions -------------------------------------------------------------------------
 
-    public void SendChat(string text, int priority = 0, Action<TimeSpan>? onSent = null)
+    /// <summary>
+    /// Bot chat goes out ahead of the GO/PO traffic by default: a reply to !vote or the greeting
+    /// that waits behind a GO, a PO and the GAME refresh arrives 7-10 s after the command, which
+    /// reads as the bot being slow. Lines that waited over a second are logged.
+    /// </summary>
+    public void SendChat(string text, int priority = UrgentChatPriority, Action<TimeSpan>? onSent = null)
     {
+        onSent ??= queued =>
+        {
+            if (queued.TotalMilliseconds > 1000)
+                Log.Info(Tag, $"chat line left the queue after {queued.TotalMilliseconds:F0} ms: {text[..Math.Min(60, text.Length)]}");
+        };
         _irc.SendChat(Channel, text, priority: priority, onSent: onSent);
         _db.LogChat(Def.Id, Channel, _irc.Nick, null, text, outgoing: true);
     }

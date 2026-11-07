@@ -17,8 +17,10 @@ public sealed class IdentStore : IDisposable
     private readonly SqliteConnection _db;
     private readonly string _connectionString;
     private readonly object _gate = new();
-    private int? _identCount;          // full-table count, computed in the background (minutes on a cold disk)
-    private Task? _identCountTask;
+    private int? _identCount;          // from the summary table once it exists
+    private Task? _summaryTask;
+    /// <summary>True once the per-ident summary table (idents) is complete; Search needs it.</summary>
+    public bool SummaryReady { get; private set; }
 
     public IdentStore(string path)
     {
@@ -38,6 +40,16 @@ public sealed class IdentStore : IDisposable
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS sightings_day ON sightings(day);
             CREATE INDEX IF NOT EXISTS sightings_host ON sightings(host);
+            -- One row per ident, kept in step by ImportDay and rebuilt in the background when empty:
+            -- the admin search and the counts must not walk the 6.6 million sighting rows.
+            CREATE TABLE IF NOT EXISTS idents (
+                ident     TEXT PRIMARY KEY,
+                first     TEXT NOT NULL,
+                last      TEXT NOT NULL,
+                days      INTEGER NOT NULL,
+                last_nick TEXT NOT NULL,
+                last_host TEXT
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS imported_files (
                 file TEXT PRIMARY KEY,    -- yyyy_MM/dd.txt
                 imported_at TEXT NOT NULL,
@@ -90,19 +102,24 @@ public sealed class IdentStore : IDisposable
         }
     }
 
-    /// <summary>Idents whose ident, nick or host matches a LIKE pattern, most recently seen first.</summary>
+    /// <summary>
+    /// Idents whose ident, last nick or last host matches a LIKE pattern, most recently seen first.
+    /// Reads the summary table only (earlier nicks of an ident are not searched).
+    /// </summary>
     public List<IdentHistory> Search(string like, int limit)
     {
+        if (!SummaryReady)
+        {
+            StartSummaryBuild();
+            throw new InvalidOperationException("The ident index is still being built (a few minutes after start-up). Try again shortly.");
+        }
         lock (_gate)
         {
             using var cmd = _db.CreateCommand();
             cmd.CommandText = """
-                SELECT ident, MIN(day), MAX(day), COUNT(*),
-                       (SELECT nick FROM sightings s2 WHERE s2.ident = s.ident ORDER BY day DESC LIMIT 1),
-                       (SELECT host FROM sightings s3 WHERE s3.ident = s.ident ORDER BY day DESC LIMIT 1)
-                FROM sightings s
-                WHERE ident IN (SELECT DISTINCT ident FROM sightings WHERE ident LIKE $q OR nick LIKE $q OR host LIKE $q LIMIT $limit)
-                GROUP BY ident ORDER BY MAX(day) DESC
+                SELECT ident, first, last, days, last_nick, last_host FROM idents
+                WHERE ident LIKE $q OR last_nick LIKE $q OR last_host LIKE $q
+                ORDER BY last DESC LIMIT $limit
                 """;
             cmd.Parameters.AddWithValue("$q", like);
             cmd.Parameters.AddWithValue("$limit", limit);
@@ -148,6 +165,16 @@ public sealed class IdentStore : IDisposable
         lock (_gate)
         {
             using var tx = _db.BeginTransaction();
+            // Every ident whose rows change gets its summary row recomputed below.
+            var touched = new HashSet<string>(sightings.Keys);
+            using (var old = _db.CreateCommand())
+            {
+                old.Transaction = tx;
+                old.CommandText = "SELECT ident FROM sightings WHERE day = $day";
+                old.Parameters.AddWithValue("$day", day.ToString("yyyy-MM-dd"));
+                using var r = old.ExecuteReader();
+                while (r.Read()) touched.Add(r.GetString(0));
+            }
             using (var del = _db.CreateCommand())
             {
                 del.Transaction = tx;
@@ -174,6 +201,21 @@ public sealed class IdentStore : IDisposable
                     ins.ExecuteNonQuery();
                 }
             }
+            using (var sum = _db.CreateCommand())
+            {
+                sum.Transaction = tx;
+                sum.CommandText = SummaryUpsertSql;
+                var ps = sum.Parameters.Add("$i", SqliteType.Text);
+                using var gone = _db.CreateCommand();
+                gone.Transaction = tx;
+                gone.CommandText = "DELETE FROM idents WHERE ident = $i AND NOT EXISTS (SELECT 1 FROM sightings WHERE ident = $i)";
+                var pg = gone.Parameters.Add("$i", SqliteType.Text);
+                foreach (var ident in touched)
+                {
+                    ps.Value = ident;
+                    if (sum.ExecuteNonQuery() == 0) { pg.Value = ident; gone.ExecuteNonQuery(); }
+                }
+            }
             using (var mark = _db.CreateCommand())
             {
                 mark.Transaction = tx;
@@ -192,45 +234,116 @@ public sealed class IdentStore : IDisposable
         }
     }
 
+    /// <summary>Recomputes one ident's summary row from its sightings (no rows: nothing written, caller deletes).</summary>
+    private const string SummaryUpsertSql = """
+        INSERT OR REPLACE INTO idents (ident, first, last, days, last_nick, last_host)
+        SELECT $i, MIN(day), MAX(day), COUNT(*),
+               (SELECT nick FROM sightings WHERE ident = $i ORDER BY day DESC LIMIT 1),
+               (SELECT host FROM sightings WHERE ident = $i ORDER BY day DESC LIMIT 1)
+        FROM sightings WHERE ident = $i HAVING COUNT(*) > 0
+        """;
+
     /// <summary>
     /// Totals. Days and the date range come from the imported_files table and the day index (instant);
-    /// the distinct-ident count needs a pass over the whole 1 GB table, so it is computed once in the
-    /// background on its own connection and reported as null until it is ready.
+    /// the ident count comes from the summary table and is null until that has been built.
     /// </summary>
     public (int? idents, int days, DateOnly? first, DateOnly? last) Stats()
     {
-        int days; DateOnly? first, last;
+        StartSummaryBuild();
         lock (_gate)
         {
             using var cmd = _db.CreateCommand();
             cmd.CommandText = "SELECT (SELECT COUNT(*) FROM imported_files), (SELECT MIN(day) FROM sightings), (SELECT MAX(day) FROM sightings)";
             using var r = cmd.ExecuteReader();
             r.Read();
-            days = r.GetInt32(0);
-            first = r.IsDBNull(1) ? null : DateOnly.Parse(r.GetString(1));
-            last = r.IsDBNull(2) ? null : DateOnly.Parse(r.GetString(2));
-            if (_identCount is null && (_identCountTask is null || _identCountTask.IsCompleted))
-                _identCountTask = Task.Run(CountIdents);
+            int days = r.GetInt32(0);
+            DateOnly? first = r.IsDBNull(1) ? null : DateOnly.Parse(r.GetString(1));
+            DateOnly? last = r.IsDBNull(2) ? null : DateOnly.Parse(r.GetString(2));
+            if (_identCount is null && SummaryReady)
+            {
+                using var cnt = _db.CreateCommand();
+                cnt.CommandText = "SELECT COUNT(*) FROM idents";
+                _identCount = Convert.ToInt32(cnt.ExecuteScalar());
+            }
             return (_identCount, days, first, last);
         }
     }
 
-    private void CountIdents()
+    /// <summary>Builds the summary table in the background if it is empty; a no-op once it exists.</summary>
+    public void StartSummaryBuild()
+    {
+        lock (_gate)
+        {
+            if (SummaryReady || _summaryTask is { IsCompleted: false }) return;
+            _summaryTask = Task.Run(BuildSummary);
+        }
+    }
+
+    /// <summary>
+    /// One ordered pass over the sightings primary key (ident, day) on a reader connection, written
+    /// in short batches on a second connection so imports and look-ups are never blocked for long.
+    /// </summary>
+    private void BuildSummary()
     {
         try
         {
-            using var db = new SqliteConnection(_connectionString);
-            db.Open();
-            using var cmd = db.CreateCommand();
+            using var reader = new SqliteConnection(_connectionString);
+            using var writer = new SqliteConnection(_connectionString);
+            reader.Open();
+            writer.Open();
+            using (var have = writer.CreateCommand())
+            {
+                have.CommandText = "SELECT COUNT(*) FROM idents";
+                if (Convert.ToInt64(have.ExecuteScalar()) > 0)
+                {
+                    SummaryReady = true;
+                    Log.Info("idents", "ident summary table present");
+                    return;
+                }
+            }
+            Log.Info("idents", "building the ident summary table (one pass over the sightings)");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            using var scan = reader.CreateCommand();
             // GROUP BY walks the primary key in order: one pass, no temporary b-tree.
-            cmd.CommandText = "SELECT COUNT(*) FROM (SELECT 1 FROM sightings GROUP BY ident)";
-            int n = Convert.ToInt32(cmd.ExecuteScalar());
-            lock (_gate) _identCount = n;
-            Log.Info("idents", $"ident database holds {n} distinct idents");
+            scan.CommandText = "SELECT ident, MIN(day), MAX(day), COUNT(*) FROM sightings GROUP BY ident";
+            using var rows = scan.ExecuteReader();
+
+            using var ins = writer.CreateCommand();
+            ins.CommandText = """
+                INSERT OR REPLACE INTO idents (ident, first, last, days, last_nick, last_host)
+                SELECT $i, $f, $l, $n, nick, host FROM sightings WHERE ident = $i AND day = $l
+                """;
+            var pi = ins.Parameters.Add("$i", SqliteType.Text);
+            var pf = ins.Parameters.Add("$f", SqliteType.Text);
+            var pl = ins.Parameters.Add("$l", SqliteType.Text);
+            var pn = ins.Parameters.Add("$n", SqliteType.Integer);
+            int total = 0;
+            SqliteTransaction? tx = null;
+            while (rows.Read())
+            {
+                tx ??= writer.BeginTransaction();
+                ins.Transaction = tx;
+                pi.Value = rows.GetString(0);
+                pf.Value = rows.GetString(1);
+                pl.Value = rows.GetString(2);
+                pn.Value = rows.GetInt32(3);
+                ins.ExecuteNonQuery();
+                if (++total % 5000 == 0)
+                {
+                    tx.Commit();
+                    tx.Dispose();
+                    tx = null;
+                }
+            }
+            tx?.Commit();
+            tx?.Dispose();
+            lock (_gate) _identCount = total;
+            SummaryReady = true;
+            Log.Info("idents", $"ident summary built: {total} idents in {sw.Elapsed.TotalSeconds:F0} s");
         }
         catch (Exception ex)
         {
-            Log.Warn("idents", $"ident count failed: {ex.Message}");
+            Log.Warn("idents", $"ident summary build failed: {ex.Message}");
         }
     }
 

@@ -256,7 +256,8 @@ async function refreshMatches() {
 }
 async function searchIdents() {
   const q = $('#identQuery').value.trim(); if (!q) return;
-  const rows = await get('api/idents?q=' + encodeURIComponent(q));
+  let rows;
+  try { rows = await get('api/idents?q=' + encodeURIComponent(q)); } catch (e) { toast(e.message); return; }
   $('#identTable').innerHTML = '<tr><th>Ident</th><th>First seen</th><th>Last seen</th><th>Days</th><th>Last nick</th><th>Host</th><th>Rooms</th></tr>' + rows.map(r =>
     `<tr><td><a href="#" onclick="identDays('${esc(r.ident)}');return false">${esc(r.ident)}</a></td><td>${r.firstSeen}</td><td>${r.lastSeen}</td><td>${r.days}</td><td>${esc(r.lastNick)}</td><td class="muted">${esc(r.lastHost ?? '')}</td><td>${r.verdicts.map(v => `<span class="${v.allowed ? 'good' : 'bad'}" title="${esc(v.reason)}">${esc(v.room)}: ${v.allowed ? 'ok' : 'kick'}</span>`).join('<br>')}</td></tr>`).join('');
 }

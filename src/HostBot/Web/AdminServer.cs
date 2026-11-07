@@ -163,7 +163,9 @@ public sealed class AdminServer
         app.MapGet("/api/idents", (string q, int? limit) =>
         {
             string like = "%" + q.Trim() + "%";
-            var rows = _idents.Search(like, Math.Clamp(limit ?? 100, 1, 500));
+            List<IdentHistory> rows;
+            try { rows = _idents.Search(like, Math.Clamp(limit ?? 100, 1, 500)); }
+            catch (InvalidOperationException ex) { return Results.Text(ex.Message, statusCode: 503); }
             return Json(rows.Select(r => new
             {
                 r.Ident, r.FirstSeen, r.LastSeen, r.Days, r.LastNick, r.LastHost,
