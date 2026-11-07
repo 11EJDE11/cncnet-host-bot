@@ -7,6 +7,8 @@ namespace HostBot.Idents;
 /// they reach this class, so the same machine always maps to one row.
 /// </summary>
 public sealed record IdentHistory(string Ident, DateOnly FirstSeen, DateOnly LastSeen, int Days, string LastNick, string? LastHost);
+/// <summary>One ident's use of a nick: the days (rows) on which that ident was seen under the nick.</summary>
+public sealed record NickIdent(string Ident, DateOnly FirstSeen, DateOnly LastSeen, int Days);
 
 /// <summary>
 /// SQLite-backed store of ident sightings built from the CnCNet chat logs. One row per
@@ -21,6 +23,8 @@ public sealed class IdentStore : IDisposable
     private Task? _summaryTask;
     /// <summary>True once the per-ident summary table (idents) is complete; Search needs it.</summary>
     public bool SummaryReady { get; private set; }
+    /// <summary>True once the nick index exists; LookupNick returns nothing before that rather than scan the table.</summary>
+    public bool NickIndexReady { get; private set; }
 
     public IdentStore(string path)
     {
@@ -87,6 +91,27 @@ public sealed class IdentStore : IDisposable
                 DateOnly.Parse(r.GetString(0)), DateOnly.Parse(r.GetString(1)),
                 r.GetInt32(2), r.GetString(3), r.IsDBNull(4) ? null : r.GetString(4));
         }
+    }
+
+    /// <summary>
+    /// Every ident seen under the nick (IRC nicks are case-insensitive), most recently active first.
+    /// Empty while the nick index is still being built in the background, or when the nick was never seen.
+    /// </summary>
+    public List<NickIdent> NickIdents(string nick)
+    {
+        var list = new List<NickIdent>();
+        if (!NickIndexReady || string.IsNullOrWhiteSpace(nick))
+            return list;
+        lock (_gate)
+        {
+            using var cmd = _db.CreateCommand();
+            cmd.CommandText = "SELECT ident, MIN(day), MAX(day), COUNT(*) FROM sightings WHERE nick = $nick COLLATE NOCASE GROUP BY ident ORDER BY MAX(day) DESC";
+            cmd.Parameters.AddWithValue("$nick", nick.Trim());
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                list.Add(new NickIdent(r.GetString(0), DateOnly.Parse(r.GetString(1)), DateOnly.Parse(r.GetString(2)), r.GetInt32(3)));
+        }
+        return list;
     }
 
     /// <summary>Earliest day on which the cloaked host part was seen, regardless of ident.</summary>
@@ -269,14 +294,23 @@ public sealed class IdentStore : IDisposable
         }
     }
 
-    /// <summary>Builds the summary table in the background if it is empty; a no-op once it exists.</summary>
+    /// <summary>Builds the summary table and the nick index in the background if missing; a no-op once both exist.</summary>
     public void StartSummaryBuild()
     {
         lock (_gate)
         {
-            if (SummaryReady || _summaryTask is { IsCompleted: false }) return;
+            if ((SummaryReady && NickIndexReady) || _summaryTask is { IsCompleted: false }) return;
             _summaryTask = Task.Run(BuildSummary);
         }
+    }
+
+    /// <summary>Starts the background build if needed and waits for it (command-line look-ups).</summary>
+    public void WaitForBackgroundBuild()
+    {
+        StartSummaryBuild();
+        Task? t;
+        lock (_gate) t = _summaryTask;
+        t?.Wait();
     }
 
     /// <summary>
@@ -291,6 +325,28 @@ public sealed class IdentStore : IDisposable
             using var writer = new SqliteConnection(_connectionString);
             reader.Open();
             writer.Open();
+            if (!SummaryReady)
+                BuildSummaryTable(reader, writer);
+            if (!NickIndexReady)
+            {
+                // Case-insensitive like IRC; the LookupNick comparison names the same collation so the index is used.
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                using var idx = writer.CreateCommand();
+                idx.CommandText = "CREATE INDEX IF NOT EXISTS sightings_nick ON sightings(nick COLLATE NOCASE)";
+                idx.ExecuteNonQuery();
+                NickIndexReady = true;
+                if (sw.Elapsed.TotalSeconds >= 1)
+                    Log.Info("idents", $"nick index built in {sw.Elapsed.TotalSeconds:F0} s");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn("idents", $"ident index build failed: {ex.Message}");
+        }
+    }
+
+    private void BuildSummaryTable(SqliteConnection reader, SqliteConnection writer)
+    {
             using (var have = writer.CreateCommand())
             {
                 have.CommandText = "SELECT COUNT(*) FROM idents";
@@ -340,11 +396,6 @@ public sealed class IdentStore : IDisposable
             lock (_gate) _identCount = total;
             SummaryReady = true;
             Log.Info("idents", $"ident summary built: {total} idents in {sw.Elapsed.TotalSeconds:F0} s");
-        }
-        catch (Exception ex)
-        {
-            Log.Warn("idents", $"ident summary build failed: {ex.Message}");
-        }
     }
 
     private void Exec(string sql)

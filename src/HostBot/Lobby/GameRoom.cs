@@ -152,6 +152,12 @@ public sealed class GameRoom
     private const int SpectateGraceSeconds = 30;
     /// <summary>!mappick votes: map section name -> voters.</summary>
     private readonly Dictionary<string, HashSet<string>> _mapVotes = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>!blitz voters; only those still in the room count.</summary>
+    private readonly HashSet<string> _modeVotes = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Game mode in play: the configured one, or the Blitz mode while a !blitz vote is in effect.</summary>
+    public string GameModeName => Mode?.Name ?? Def.GameMode;
+    private bool BlitzEnabled => !string.IsNullOrEmpty(Def.BlitzGameMode) && !Def.BlitzGameMode.Equals(Def.GameMode, StringComparison.OrdinalIgnoreCase);
+    private bool InBlitz => BlitzEnabled && GameModeName.Equals(Def.BlitzGameMode, StringComparison.OrdinalIgnoreCase);
 
     public GameRoom(RoomConfig def, IrcClient irc, TunnelList tunnels, IdentPolicy policy, MapPoolFile pool,
         OptionLayout layout, BotDb db, ClientDialect dialect, string game)
@@ -177,9 +183,12 @@ public sealed class GameRoom
             "v3dynamic" or "dynamic" => TunnelMode.V3Dynamic,
             _ => TunnelMode.V3Static,
         };
-        Mode = pool.GameModes.FirstOrDefault(m => m.Name.Equals(def.GameMode, StringComparison.OrdinalIgnoreCase))
-               ?? new GameModeEntry { Name = def.GameMode };
+        SetMode(def.GameMode);
     }
+
+    private void SetMode(string name) =>
+        Mode = _pool.GameModes.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+               ?? new GameModeEntry { Name = name };
 
     // ---- lifecycle ---------------------------------------------------------------------------
 
@@ -501,7 +510,7 @@ public sealed class GameRoom
         if (FindPlayer(nick) is not null)
             return;
 
-        var verdict = _policy.Evaluate(ident ?? "", host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback);
+        var verdict = _policy.Evaluate(ident ?? "", host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback, nick, Def.NickHistoryMinDays);
         string identInfo = verdict.History is { } h ? $"first seen {h.FirstSeen:yyyy-MM-dd}, {h.Days} days, last nick {h.LastNick}" : "no history";
         if (!verdict.Allowed)
         {
@@ -561,9 +570,24 @@ public sealed class GameRoom
             foreach (var x in Players) x.MustSpectateBy = null; // the slots are no longer over-subscribed; late joiners may keep theirs
         SendPlayerOptions();
         if (Players.Count == 0)
+        {
             _emptySince = DateTime.UtcNow;
+            if (InBlitz)
+                ResetMode();
+        }
         UpdateLock();
         _lastBroadcast = DateTime.MinValue;
+    }
+
+    /// <summary>Back to the configured mode and its maps once everyone has left; the next group starts from the room's own maps.</summary>
+    private void ResetMode()
+    {
+        Log.Info(Tag, $"room empty: game mode {GameModeName} -> {Def.GameMode}");
+        SetMode(Def.GameMode);
+        _recentMaps.Clear();
+        PickNextMap();
+        SendGameOptions();
+        SendPlayerExtraOptions();
     }
 
     // ---- CTCP from players ---------------------------------------------------------------------
@@ -696,6 +720,7 @@ public sealed class GameRoom
         {
             case "!help":
                 SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle options, several at once: !vote sw france), !rules"
+                         + (BlitzEnabled ? $", !blitz (vote to switch to {Def.BlitzGameMode} maps{(InBlitz ? $" and back to {Def.GameMode}" : "")})" : "")
                          + (Def.AllowInvites && Def.Tier != RoomTier.Open ? ", !invite <nick> (let a player in who the ident check would refuse)" : "")
                          + (SpectatorSeats > 0 ? ". To watch, choose Spectator in the side list." : "."));
                 break;
@@ -706,6 +731,10 @@ public sealed class GameRoom
             case "!invite" when p is not null:
                 HandleInvite(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
                 break;
+            case "!blitz" when p is not null && CurrentMatchId is null:
+                if (DateTime.UtcNow - _mapChangedAt >= TimeSpan.FromSeconds(5))
+                    HandleBlitz(p);
+                break;
             case "!vote" when p is not null && CurrentMatchId is null:
                 HandleVote(p, text.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToList());
                 break;
@@ -715,7 +744,7 @@ public sealed class GameRoom
             case "!rules":
                 SendChat(Def.Tier switch
                 {
-                    RoomTier.Noob => $"Beginner room: players whose ident has been seen on CnCNet for more than {Def.MaxIdentAgeDays} days are kicked.",
+                    RoomTier.Noob => $"Beginner room: players whose ident{(Def.NickHistoryMinDays > 0 ? " or nick" : "")} has been seen on CnCNet for more than {Def.MaxIdentAgeDays} days are kicked.",
                     RoomTier.Pro => $"Pro room: players whose ident has been seen on CnCNet for less than {Def.MinIdentAgeDays} days are kicked.",
                     _ => "Open room: anyone may play.",
                 });
@@ -800,6 +829,43 @@ public sealed class GameRoom
         SendPlayerExtraOptions();
         SendChat($"Map changed to {Map!.Name} by vote.");
         _db.LogEvent(Def.Id, "mappick", p.Nick, p.Ident, p.Host, map.Name);
+    }
+
+    /// <summary>"!blitz": the room's vote threshold switches it to the Blitz mode and that mode's maps, or back to the configured mode.</summary>
+    private void HandleBlitz(Player p)
+    {
+        if (!BlitzEnabled)
+        {
+            SendChat("Blitz is not available in this room.");
+            return;
+        }
+        string target = InBlitz ? Def.GameMode : Def.BlitzGameMode;
+        if (_pool.Select(Def, MaxPlayers, target).Count == 0)
+        {
+            SendChat($"No {MaxPlayers / 2}v{MaxPlayers / 2} maps for {target} in the pool.");
+            return;
+        }
+        _modeVotes.Add(p.Nick);
+        int votes = _modeVotes.Count(n => FindPlayer(n) is not null);
+        int needed = Def.VotesNeeded > 0 ? Math.Min(Def.VotesNeeded, Players.Count) : Players.Count / 2 + 1;
+        if (votes < needed)
+        {
+            SendChat($"{p.Nick} wants to switch to {target} maps ({votes}/{needed} votes). Type !blitz to agree.");
+            return;
+        }
+        _modeVotes.Clear();
+        foreach (var x in Players) x.WantsNextMap = false;
+        Log.Info(Tag, $"game mode {GameModeName} -> {target} by vote ({p.Nick})");
+        _db.LogEvent(Def.Id, "mode", p.Nick, p.Ident, p.Host, target);
+        SetMode(target);
+        _recentMaps.Clear();
+        PickNextMap();
+        ClearReadyStatuses();
+        SendGameOptions();
+        SendPlayerOptions();
+        SendPlayerExtraOptions();
+        Broadcast();
+        SendChat($"Switched to {target}: map {Map!.Name}. Ready up again.{(InBlitz ? $" !blitz again goes back to {Def.GameMode} maps." : "")}");
     }
 
     /// <summary>Removes late joiners who neither became spectators nor got a player slot within the grace period.</summary>
@@ -956,7 +1022,7 @@ public sealed class GameRoom
             return;
         }
 
-        var verdict = _policy.Evaluate(ident, target.Host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback);
+        var verdict = _policy.Evaluate(ident, target.Host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback, target.Nick, Def.NickHistoryMinDays);
         int days = Math.Max(1, Def.InviteDays);
         if (!verdict.Allowed)
             _policy.Add(new WhitelistEntry(ident, Def.Id, "invite", $"{inviter.Nick} ({IdentStore.Normalise(inviter.Ident ?? "?")})",
@@ -1264,14 +1330,14 @@ public sealed class GameRoom
     /// <summary>The room's map pool for its current size; falls back to the plain filters if the admin excluded everything.</summary>
     private List<MapEntry> MapChoices()
     {
-        var choices = _pool.Select(Def, MaxPlayers);
+        var choices = _pool.Select(Def, MaxPlayers, GameModeName);
         if (choices.Count == 0)
         {
             Log.Warn(Tag, $"no maps left in the pool for {MaxPlayers} players after exclusions; using every map that matches the filters");
-            choices = _pool.Maps.Where(m => MapPoolFile.MatchesFilters(m, Def, MaxPlayers)).ToList();
+            choices = _pool.Maps.Where(m => MapPoolFile.MatchesFilters(m, Def, MaxPlayers, GameModeName)).ToList();
         }
         if (choices.Count == 0)
-            choices = _pool.Maps.Where(m => m.MaxPlayers == MaxPlayers && m.GameModes.Contains(Def.GameMode, StringComparer.OrdinalIgnoreCase)).ToList();
+            choices = _pool.Maps.Where(m => m.MaxPlayers == MaxPlayers && m.GameModes.Contains(GameModeName, StringComparer.OrdinalIgnoreCase)).ToList();
         if (choices.Count == 0)
             choices = _pool.Maps.Where(m => m.MaxPlayers == MaxPlayers).ToList();
         if (choices.Count == 0)
@@ -1328,7 +1394,7 @@ public sealed class GameRoom
     {
         int wanted = DesiredMaxPlayers();
         if (wanted == MaxPlayers) return;
-        if (_pool.Select(Def, wanted).Count == 0)
+        if (_pool.Select(Def, wanted, GameModeName).Count == 0)
         {
             Log.Warn(Tag, $"cannot switch to {wanted} players: no maps in the pool for that size");
             return;
@@ -1355,6 +1421,7 @@ public sealed class GameRoom
         _mapChangedAt = DateTime.UtcNow;
         _votes.Clear();
         _mapVotes.Clear();
+        _modeVotes.Clear();
         _forceRandomSides = false;
         _fullCountdownShown = false;
         _recentMaps.Add(map.BaseFilePath);

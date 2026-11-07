@@ -53,21 +53,24 @@ public sealed class MapPoolFile
     /// A room's map pool for a given room size, in MPMaps.ini order: every map matching the room's
     /// filters plus the explicitly added ones, minus the excluded ones.
     /// </summary>
-    public List<MapEntry> Select(RoomConfig room, int maxPlayers)
+    public List<MapEntry> Select(RoomConfig room, int maxPlayers, string? gameMode = null)
     {
-        var extra = new HashSet<string>(room.Maps, StringComparer.OrdinalIgnoreCase);
+        gameMode ??= room.GameMode;
+        // The maps ticked on the admin page belong to the configured mode; a voted mode (!blitz) plays its own maps only.
+        bool configuredMode = gameMode.Equals(room.GameMode, StringComparison.OrdinalIgnoreCase);
+        var extra = new HashSet<string>(configuredMode ? room.Maps : new List<string>(), StringComparer.OrdinalIgnoreCase);
         var excluded = new HashSet<string>(room.ExcludedMaps, StringComparer.OrdinalIgnoreCase);
         return Maps.Where(m => !excluded.Contains(m.BaseFilePath)
-                               && (extra.Contains(m.BaseFilePath) || extra.Contains(m.Name) || MatchesFilters(m, room, maxPlayers)))
+                               && (extra.Contains(m.BaseFilePath) || extra.Contains(m.Name) || MatchesFilters(m, room, maxPlayers, gameMode)))
                    .ToList();
     }
 
     public List<MapEntry> Select(RoomConfig room) => Select(room, room.MaxPlayers);
 
     /// <summary>Whether the room's filters (player count, game mode, team layout) admit the map at this room size.</summary>
-    public static bool MatchesFilters(MapEntry m, RoomConfig room, int maxPlayers) =>
+    public static bool MatchesFilters(MapEntry m, RoomConfig room, int maxPlayers, string? gameMode = null) =>
         m.MaxPlayers == maxPlayers
-        && m.GameModes.Contains(room.GameMode, StringComparer.OrdinalIgnoreCase)
+        && m.GameModes.Contains(gameMode ?? room.GameMode, StringComparer.OrdinalIgnoreCase)
         && (!room.RequireTeamStartMappings || TeamMapping(m, maxPlayers / 2) is not null);
 
     /// <summary>
@@ -110,19 +113,8 @@ public static class MapPoolBuilder
 
         var gameModes = ini.Get("GameModes");
         if (gameModes is not null)
-        {
             foreach (var (_, modeName) in gameModes.Entries)
-            {
-                var gm = new GameModeEntry { Name = modeName };
-                var sec = ini.Get(modeName);
-                if (sec is not null)
-                {
-                    CollectForced(ini, sec.Get("ForcedOptions"), gm.ForcedOptions);
-                    CollectForced(ini, sec.Get("ForcedSpawnIniOptions"), gm.ForcedSpawnIniOptions);
-                }
-                pool.GameModes.Add(gm);
-            }
-        }
+                pool.GameModes.Add(LoadGameMode(ini, modeName));
 
         int missing = 0;
         foreach (var sec in ini.Sections)
@@ -170,9 +162,27 @@ public static class MapPoolBuilder
             pool.Maps.Add(entry);
         }
 
+        // Like the client (MapLoader.AddMapToGameModes), a mode that only appears in maps' GameModes= lists is a
+        // game mode too, with its own [<Name>] section: YR's "Blitz 2v2" is one, the [GameModes] list names only "Blitz".
+        foreach (var modeName in pool.Maps.SelectMany(m => m.GameModes).Distinct(StringComparer.Ordinal))
+            if (!pool.GameModes.Any(g => g.Name == modeName))
+                pool.GameModes.Add(LoadGameMode(ini, modeName));
+
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
         File.WriteAllText(outPath, JsonSerializer.Serialize(pool, BotConfig.JsonOptions));
         Log.Info(Tag, $"wrote {pool.Maps.Count} maps ({missing} listed without a file) and {pool.GameModes.Count} game modes to {outPath}");
+    }
+
+    private static GameModeEntry LoadGameMode(IniFile ini, string modeName)
+    {
+        var gm = new GameModeEntry { Name = modeName };
+        var sec = ini.Get(modeName);
+        if (sec is not null)
+        {
+            CollectForced(ini, sec.Get("ForcedOptions"), gm.ForcedOptions);
+            CollectForced(ini, sec.Get("ForcedSpawnIniOptions"), gm.ForcedSpawnIniOptions);
+        }
+        return gm;
     }
 
     private static void CollectForced(IniFile ini, string? sectionList, Dictionary<string, string> into)

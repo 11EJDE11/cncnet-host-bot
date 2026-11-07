@@ -83,13 +83,14 @@ public static class Program
                 using var db = new HostBot.Storage.BotDb(cfg.BotDb);
                 var policy = new IdentPolicy(store, db, cfg.Whitelist);
                 string ident = list[2];
+                store.WaitForBackgroundBuild();
                 var h = store.Lookup(ident);
                 Console.WriteLine(h is null
                     ? $"{IdentStore.Normalise(ident)}: never seen"
                     : $"{h.Ident}: first {h.FirstSeen:yyyy-MM-dd}, last {h.LastSeen:yyyy-MM-dd}, {h.Days} days, last nick {h.LastNick}, host {h.LastHost}");
                 foreach (var room in cfg.Rooms)
                 {
-                    var v = policy.Evaluate(ident, h?.LastHost, room.Id, room.Tier, room.MaxIdentAgeDays, room.MinIdentAgeDays, room.UseHostAsFallback);
+                    var v = policy.Evaluate(ident, h?.LastHost, room.Id, room.Tier, room.MaxIdentAgeDays, room.MinIdentAgeDays, room.UseHostAsFallback, h?.LastNick, room.NickHistoryMinDays);
                     Console.WriteLine($"  {room.Name} ({room.Tier}): {(v.Allowed ? "allowed" : "KICK")} - {v.Reason}");
                 }
                 return 0;

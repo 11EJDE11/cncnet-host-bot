@@ -172,7 +172,7 @@ public sealed class AdminServer
                 verdicts = _rooms.Hosts.Select(h => new
                 {
                     room = h.Def.Name,
-                    v = _policy.Evaluate(r.Ident, r.LastHost, h.Def.Id, h.Def.Tier, h.Def.MaxIdentAgeDays, h.Def.MinIdentAgeDays, h.Def.UseHostAsFallback),
+                    v = _policy.Evaluate(r.Ident, r.LastHost, h.Def.Id, h.Def.Tier, h.Def.MaxIdentAgeDays, h.Def.MinIdentAgeDays, h.Def.UseHostAsFallback, r.LastNick, h.Def.NickHistoryMinDays),
                 }).Select(x => new { x.room, x.v.Allowed, x.v.Reason }).ToList(),
             }).ToList());
         });

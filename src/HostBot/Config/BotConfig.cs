@@ -124,6 +124,12 @@ public sealed class RoomConfig
     public int MinIdentAgeDays { get; set; } = 90;
     /// <summary>Noob rooms: treat a fresh ident on a long-known cloaked host as old.</summary>
     public bool UseHostAsFallback { get; set; } = true;
+    /// <summary>
+    /// Noob rooms: also kick a nick that was handed over from an older ident (a veteran on a new PC): another ident
+    /// played the nick on at least this many days, was first seen more than MaxIdentAgeDays ago, and went quiet when
+    /// the joining ident appeared. Shared names stay unaffected because their other users keep playing. 0 = ident only.
+    /// </summary>
+    public int NickHistoryMinDays { get; set; } = 30;
     /// <summary>Message sent to the player before the kick, as room chat.</summary>
     public string? KickMessage { get; set; }
     /// <summary>Let players who passed the ident check type "!invite &lt;nick&gt;" to whitelist someone for this room and send them a game invitation.</summary>
@@ -134,6 +140,8 @@ public sealed class RoomConfig
     public int MaxInvitesPerDay { get; set; } = 3;
 
     public string GameMode { get; set; } = "Battle";
+    /// <summary>Game mode that "!blitz" switches the room to by vote, playing that mode's maps; the room returns to GameMode once empty. Empty disables the command.</summary>
+    public string BlitzGameMode { get; set; } = "Blitz 2v2";
     /// <summary>Room size: 4 for 2v2, 6 for 3v3. Teams are always two equal halves.</summary>
     public int MaxPlayers { get; set; } = 4;
     /// <summary>Open the room as 3v3 (6 players) instead while the CnCNet lobby is busy; the switch happens whenever the room is empty.</summary>

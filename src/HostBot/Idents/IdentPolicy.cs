@@ -113,7 +113,10 @@ public sealed class IdentPolicy
     /// <param name="minAgeDays">Pro rooms: idents first seen less than this many days ago (or never) are kicked.</param>
     /// <param name="useHostAsFallback">Also consider the cloaked host's first-seen date, so a fresh
     /// ident on a long-known connection still counts as old (noob rooms only).</param>
-    public PolicyVerdict Evaluate(string ident, string? host, string roomId, RoomTier tier, int maxAgeDays, int minAgeDays, bool useHostAsFallback)
+    /// <param name="nick">The joining nick: a noob room also refuses a nick that was handed over from an
+    /// established older ident (a veteran on a new PC); see <see cref="HandedOver"/>.</param>
+    public PolicyVerdict Evaluate(string ident, string? host, string roomId, RoomTier tier, int maxAgeDays, int minAgeDays, bool useHostAsFallback,
+        string? nick = null, int nickMinDays = 0)
     {
         ident = IdentStore.Normalise(ident);
         if (ident.Length > 0 && Find(ident, roomId) is { } entry)
@@ -134,6 +137,14 @@ public sealed class IdentPolicy
 
         int? ageDays = firstSeen is { } f ? today.DayNumber - f.DayNumber : null;
 
+        if (tier == RoomTier.Noob && nickMinDays > 0 && !string.IsNullOrWhiteSpace(nick)
+            && HandedOver(nick, ident, history?.FirstSeen ?? today, today, maxAgeDays, nickMinDays) is { } prev)
+        {
+            int prevAge = today.DayNumber - prev.FirstSeen.DayNumber;
+            return new PolicyVerdict(false,
+                $"the nick played on another ident for {prev.Days} days until {prev.LastSeen:yyyy-MM-dd} (first seen {prev.FirstSeen:yyyy-MM-dd}, {prevAge} days ago), limit {maxAgeDays} days", history);
+        }
+
         return tier switch
         {
             RoomTier.Noob when ageDays is { } a && a > maxAgeDays
@@ -148,5 +159,31 @@ public sealed class IdentPolicy
                 => new PolicyVerdict(true, $"ident age {ageDays} days", history),
             _ => new PolicyVerdict(true, "open", history),
         };
+    }
+
+    /// <summary>Days the old ident may still appear after the new one (both machines in use for a moment).</summary>
+    private const int HandoverOverlapDays = 3;
+    /// <summary>How long the old ident may have been quiet before the new one appeared; a nick dropped for longer may be someone else's now.</summary>
+    private const int HandoverGapDays = 180;
+
+    /// <summary>
+    /// Nicks are not registered on CnCNet: "GG" or "ahmed" have been used by hundreds of people, so a nick's
+    /// own age proves nothing. What does is a handover: the ident that last played this nick for weeks
+    /// started before the limit and went quiet right when the joining ident appeared (within
+    /// <see cref="HandoverGapDays"/> before and <see cref="HandoverOverlapDays"/> after). Someone else using
+    /// the same name keeps playing on their own ident and does not match. Returns the previous ident, or null.
+    /// </summary>
+    private NickIdent? HandedOver(string nick, string ident, DateOnly since, DateOnly today, int maxAgeDays, int nickMinDays)
+    {
+        // Only the nick's most recently active established ident is judged: a shared name always has some
+        // long-gone user whose ident went quiet, but its current owner keeps playing, which rules out a handover.
+        foreach (var prev in _store.NickIdents(nick))
+        {
+            if (prev.Ident == ident || prev.Days < nickMinDays) continue;
+            if (today.DayNumber - prev.FirstSeen.DayNumber <= maxAgeDays) continue;
+            int overlap = prev.LastSeen.DayNumber - since.DayNumber;
+            return overlap > HandoverOverlapDays || overlap < -HandoverGapDays ? null : prev;
+        }
+        return null;
     }
 }
