@@ -36,6 +36,12 @@ public sealed class IniFile
             return v.Trim().ToLowerInvariant() is "true" or "yes" or "1";
         }
         public bool Has(string key) => _map.ContainsKey(key);
+
+        public void Insert(int index, string key, string value)
+        {
+            Entries.Insert(index, new(key, value));
+            _map[key] = value;
+        }
     }
 
     private readonly Dictionary<string, Section> _sections = new(StringComparer.OrdinalIgnoreCase);
@@ -83,6 +89,38 @@ public sealed class IniFile
     }
 
     public Section? Get(string name) => _sections.TryGetValue(name, out var s) ? s : null;
+
+    /// <summary>
+    /// Loads a client UI INI the way the client's CCIniFile does: [INISystem] BasedOn= files first,
+    /// this file's keys merged on top, then $BaseSection= keys inserted at the front of each section.
+    /// </summary>
+    public static IniFile LoadClientIni(string path, string resourceDir)
+    {
+        var ini = Load(path);
+        string basedOn = ini.Get("INISystem", "BasedOn", "");
+        foreach (var name in basedOn.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            string basePath = name.Contains("$THEME_DIR$")
+                ? name.Replace("$THEME_DIR$", Path.TrimEndingDirectorySeparator(resourceDir) + Path.DirectorySeparatorChar)
+                : Path.Combine(Path.GetDirectoryName(path)!, name);
+            if (!File.Exists(basePath)) continue;
+            var merged = LoadClientIni(basePath, resourceDir);
+            foreach (var s in ini.Sections)
+            {
+                var target = merged.GetOrAdd(s.Name);
+                foreach (var e in s.Entries) target.Set(e.Key, e.Value);
+            }
+            ini = merged;
+        }
+        foreach (var s in ini.Sections)
+        {
+            if (s.Get("$BaseSection") is not { } baseName || ini.Get(baseName) is not { } baseSection) continue;
+            int added = 0;
+            foreach (var e in baseSection.Entries.ToList())
+                if (!s.Has(e.Key)) s.Insert(added++, e.Key, e.Value);
+        }
+        return ini;
+    }
 
     public string Get(string section, string key, string fallback) => Get(section)?.Get(key) ?? fallback;
 }

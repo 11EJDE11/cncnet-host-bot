@@ -110,6 +110,8 @@ public static class MapPoolBuilder
         var ini = IniFile.Load(mpMaps);
 
         var pool = new MapPoolFile { SourceGameDir = gameDir, BuiltAt = DateTime.UtcNow };
+        string defs = Path.Combine(gameDir, "Resources", "ClientDefinitions.ini");
+        string ext = "." + (File.Exists(defs) ? IniFile.Load(defs).Get("Settings", "MapFileExtension", "map") : "map"); // RA1 uses .mpr
 
         var gameModes = ini.Get("GameModes");
         if (gameModes is not null)
@@ -129,7 +131,7 @@ public static class MapPoolBuilder
                 foreach (var e in baseSec.Entries) merged.Set(e.Key, e.Value);
             foreach (var e in sec.Entries) merged.Set(e.Key, e.Value);
 
-            string file = Path.Combine(gameDir, sec.Name.Replace('\\', Path.DirectorySeparatorChar) + ".map");
+            string file = Path.Combine(gameDir, sec.Name.Replace('\\', Path.DirectorySeparatorChar) + ext);
             if (!File.Exists(file))
             {
                 missing++;

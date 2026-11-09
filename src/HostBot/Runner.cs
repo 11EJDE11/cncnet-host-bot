@@ -34,7 +34,7 @@ public static class Runner
 
         var stats = identStore.Stats();
         Log.Info(Tag, $"ident db: {stats.days} days imported ({stats.first:yyyy-MM-dd}..{stats.last:yyyy-MM-dd}), ident count follows; map pool: {pool.Maps.Count} maps");
-        if (stats.days == 0)
+        if (stats.days == 0 && !string.IsNullOrWhiteSpace(config.ChatLogs.BaseUrl))
             Log.Warn(Tag, "ident database is empty: run 'hostbot idents import' first, or every policy room will treat everyone as unknown");
 
         var manager = new RoomManager(config, tunnels, policy, pool, layout, db);

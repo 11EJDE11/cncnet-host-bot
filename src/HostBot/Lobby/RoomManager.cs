@@ -49,8 +49,22 @@ public sealed class RoomManager
         foreach (var r in rooms)
         {
             var host = Create(r);
-            if (r.Enabled) host.Start();
+            if (r.Enabled) Start(host);
         }
+    }
+
+    /// <summary>Starts a room unless that would exceed irc.maxConnections.</summary>
+    private void Start(RoomHost host)
+    {
+        int max = _cfg.Irc.MaxConnections;
+        int open = Hosts.Count(h => h != host && h.Running);
+        if (max > 0 && open >= max)
+        {
+            Log.Warn(Tag, $"{host.Def.Name}: not started, {open} of {max} IRC connections in use (irc.maxConnections)");
+            host.SetBlocked($"not started: connection limit ({max})");
+            return;
+        }
+        host.Start();
     }
 
     private RoomHost Create(RoomConfig def)
@@ -79,7 +93,7 @@ public sealed class RoomManager
         Validate(def);
         _db.SaveRoom(def);
         var host = Create(def);
-        if (def.Enabled) host.Start();
+        if (def.Enabled) Start(host);
         Log.Info(Tag, $"added room {def.Id} ({def.Name})");
         return host;
     }
@@ -95,11 +109,11 @@ public sealed class RoomManager
         {
             await host.StopAsync("settings changed");
             var fresh = Create(def);
-            if (def.Enabled) fresh.Start();
+            if (def.Enabled) Start(fresh);
         }
         else if (def.Enabled && !host.Running)
         {
-            Create(def).Start();
+            Start(Create(def));
         }
         else if (!def.Enabled && host.Running)
         {
@@ -121,7 +135,7 @@ public sealed class RoomManager
         if (host.Running) return;
         host.Def.Enabled = true;
         _db.SaveRoom(host.Def);
-        Create(host.Def).Start();
+        Start(Create(host.Def));
     }
 
     public async Task DeleteAsync(string id)

@@ -29,10 +29,9 @@ public sealed class LobbyObserver
     public int SampleCount { get { lock (_gate) return _samples.Values.Sum(s => s.Count); } }
 
     /// <summary>
-    /// The client to host for: the revision and field count most hosts use, and within those the newest
-    /// version at least <see cref="MinHostsForVersion"/> hosts broadcast. During a rollout the majority
-    /// still runs the old build, but the client updates itself at launch, so everyone arriving from now on
-    /// is on the new one and a room broadcast with the old version string shows them "Incompatible".
+    /// The client to host for: the revision and field count most hosts use, and the newest version
+    /// at least <see cref="MinHostsForVersion"/> hosts run. Newest rather than most common, because
+    /// right after an update most of the lobby is still on the old build.
     /// </summary>
     public (string revision, string version, int fields)? Dominant()
     {

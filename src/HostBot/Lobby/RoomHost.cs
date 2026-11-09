@@ -31,6 +31,11 @@ public sealed class RoomHost
     public DateTime? StartedAt { get; private set; }
     public bool Running => _task is { IsCompleted: false };
 
+    private List<VoteOption> VoteOptions => _cfg.VoteOptions ?? VoteOption.Defaults();
+
+    /// <summary>Shown on the admin page when the room could not be started.</summary>
+    public void SetBlocked(string reason) => Status = reason;
+
     public RoomHost(RoomConfig def, BotConfig cfg, TunnelList tunnels, IdentPolicy policy, MapPoolFile pool, OptionLayout layout, BotDb db, bool logLobbyChat)
     {
         Def = def;
@@ -107,7 +112,7 @@ public sealed class RoomHost
                 var dialect = await LearnDialectAsync(irc, broadcastChannel, ct);
                 Log.Info(Tag, $"client dialect: revision {dialect.Revision}, version '{dialect.GameVersion}', {dialect.GameFieldCount} GAME fields");
 
-                var room = new GameRoom(Def, irc, _tunnels, _policy, _pool, _layout, _db, dialect, game);
+                var room = new GameRoom(Def, irc, _tunnels, _policy, _pool, _layout, _db, dialect, game, VoteOptions);
                 Room = room;
                 await room.OpenAsync(ct);
                 Status = "hosting";
@@ -123,7 +128,7 @@ public sealed class RoomHost
                     {
                         await room.CloseAsync("abandoned after launch", announceClosed: false);
                         var previous = room;
-                        room = new GameRoom(Def, irc, _tunnels, _policy, _pool, _layout, _db, dialect, game);
+                        room = new GameRoom(Def, irc, _tunnels, _policy, _pool, _layout, _db, dialect, game, VoteOptions);
                         room.InheritFormat(previous);
                         Room = room;
                         await room.OpenAsync(ct);

@@ -127,15 +127,7 @@ public sealed class IdentPolicy
         }
     }
 
-    /// <param name="roomId">Room the player is joining; selects the room-scoped whitelist entries.</param>
-    /// <param name="tier">Which rule set applies.</param>
-    /// <param name="maxAgeDays">Noob rooms: idents first seen more than this many days ago are kicked.</param>
-    /// <param name="minAgeDays">Pro rooms: idents first seen less than this many days ago (or never) are kicked.</param>
-    /// <param name="useHostAsFallback">Also consider the cloaked host's first-seen date, so a fresh
-    /// ident on a long-known connection still counts as old (noob rooms only).</param>
-    /// <param name="nick">The joining nick: a noob room also refuses a nick that was handed over from an
-    /// established older ident (a veteran on a new PC); see <see cref="HandedOver"/>.</param>
-    /// <param name="minActiveDays">Any tier: refuse idents seen on fewer days than this (a handed-over ident's days count too). 0 = off.</param>
+    /// <summary>Whether this ident may join the room. The parameters mirror the room settings of the same names.</summary>
     public PolicyVerdict Evaluate(string ident, string? host, string roomId, RoomTier tier, int maxAgeDays, int minAgeDays, bool useHostAsFallback,
         string? nick = null, int nickMinDays = 0, int minActiveDays = 0)
     {
@@ -206,11 +198,9 @@ public sealed class IdentPolicy
     private const int HandoverGapDays = 180;
 
     /// <summary>
-    /// Nicks are not registered on CnCNet: "GG" or "ahmed" have been used by hundreds of people, so a nick's
-    /// own age proves nothing. What does is a handover: the ident that last played this nick for weeks
-    /// started before the limit and went quiet right when the joining ident appeared (within
-    /// <see cref="HandoverGapDays"/> before and <see cref="HandoverOverlapDays"/> after). Someone else using
-    /// the same name keeps playing on their own ident and does not match. Returns the previous ident, or null.
+    /// The ident this nick was handed over from (a player on a new PC), or null. Nicks are not registered,
+    /// so only a handover counts: the nick's last established ident went quiet when this one appeared.
+    /// Someone else using a common name keeps playing on their own ident and does not match.
     /// </summary>
     private NickIdent? HandedOver(string nick, string ident, DateOnly since, DateOnly today, int minPrevAgeDays, int nickMinDays)
     {

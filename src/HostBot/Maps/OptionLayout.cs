@@ -36,6 +36,7 @@ public sealed class OptionLayout
     public int ProtocolVersion { get; set; } = 2;
 
     /// <summary>SideId of the Spectator entry in the side drop-down.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
     public int SpectatorSideId => SideCount + RandomSelectorCount;
 
     public static OptionLayout Load(string path) =>
@@ -137,4 +138,89 @@ public sealed class OptionValues
             if (_checks[c.Name]) foreach (var s in c.DisallowedSides) set.Add(s);
         return set;
     }
+}
+
+/// <summary>
+/// Builds an <see cref="OptionLayout"/> from a client package by walking the lobby window's $CC
+/// controls in the order the client creates them (depth first), as the GO message depends on it.
+/// </summary>
+public static class OptionLayoutBuilder
+{
+    private const string Tag = "options";
+
+    public static OptionLayout Build(string gameDir)
+    {
+        string res = Path.Combine(gameDir, "Resources");
+        var lobby = IniFile.LoadClientIni(Path.Combine(res, "CnCNetGameLobby.ini"), res);
+        var layout = new OptionLayout();
+
+        var windowChildren = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        Walk(lobby, "MultiplayerGameLobby", layout, 0, windowChildren);
+        if (lobby.Get("$ExtraControls") is { } extra)
+            foreach (var e in extra.Entries.Where(e => e.Key.StartsWith("$CC")))
+                if (e.Value.Split(':') is [var name, var type] && !windowChildren.Contains(name.Trim()))
+                    AddControl(lobby, name.Trim(), type.Trim(), layout, 1);
+
+        var options = IniFile.LoadClientIni(Path.Combine(res, "GameOptions.ini"), res);
+        layout.SideCount = options.Get("General", "Sides", "").Split(',', StringSplitOptions.RemoveEmptyEntries).Length;
+        layout.RandomSelectorCount = (options.Get("RandomSelectors")?.Entries.Count ?? 0) + 1;
+        layout.ColorCount = options.Get("MPColors")?.Entries.Count ?? 8;
+
+        string defs = Path.Combine(res, "ClientDefinitions.ini");
+        var settings = File.Exists(defs) ? IniFile.Load(defs).Get("Settings") : null;
+        layout.FrameSendRate = settings?.GetInt("DefaultFrameSendRate", 7) ?? 7;
+        layout.MaxAhead = settings?.GetInt("DefaultMaxAhead", 0) ?? 0;
+        layout.ProtocolVersion = settings?.GetInt("DefaultProtocolVersion", 2) ?? 2;
+        return layout;
+    }
+
+    public static void Write(OptionLayout layout, string outPath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+        File.WriteAllText(outPath, JsonSerializer.Serialize(layout, BotConfig.JsonOptions));
+        Log.Info(Tag, $"wrote {layout.CheckBoxes.Count} check boxes, {layout.DropDowns.Count} drop-downs, {layout.SideCount} sides to {outPath}");
+    }
+
+    private static void Walk(IniFile ini, string control, OptionLayout layout, int depth, HashSet<string>? children = null)
+    {
+        if (depth > 32 || ini.Get(control) is not { } section) return;
+        foreach (var e in section.Entries.Where(e => e.Key.StartsWith("$CC")))
+        {
+            if (e.Value.Split(':') is not [var name, var type]) continue;
+            children?.Add(name.Trim());
+            AddControl(ini, name.Trim(), type.Trim(), layout, depth + 1);
+        }
+    }
+
+    // A control registers itself in Initialize, which runs after its own children were read.
+    private static void AddControl(IniFile ini, string name, string type, OptionLayout layout, int depth)
+    {
+        Walk(ini, name, layout, depth);
+        var s = ini.Get(name);
+        if (type == "GameLobbyCheckBox")
+        {
+            var box = new CheckBoxDef { Name = name };
+            foreach (var e in s?.Entries ?? new())
+            {
+                if (e.Key is "Checked" or "CheckedMP") box.Default = IsTrue(e.Value);
+                else if (e.Key == "BroadcastToLobby") box.Broadcast = IsTrue(e.Value);
+                else if (e.Key is "DisallowedSideIndex" or "DisallowedSideIndices")
+                    foreach (var v in e.Value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                        if (int.TryParse(v, out int side) && !box.DisallowedSides.Contains(side)) box.DisallowedSides.Add(side);
+            }
+            layout.CheckBoxes.Add(box);
+        }
+        else if (type == "GameLobbyDropDown")
+        {
+            layout.DropDowns.Add(new DropDownDef
+            {
+                Name = name,
+                Items = (s?.Get("Items") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length,
+                Default = s?.GetInt("DefaultIndex", 0) ?? 0,
+                Broadcast = IsTrue(s?.Get("BroadcastToLobby") ?? ""),
+            });
+        }
+    }
+
+    private static bool IsTrue(string v) => v.Trim().ToLowerInvariant() is "true" or "yes" or "1";
 }

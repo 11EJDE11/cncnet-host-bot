@@ -32,6 +32,9 @@ public sealed class BotConfig
     /// <summary>Rooms seeded into the database on first start; afterwards rooms are managed from the admin page.</summary>
     public List<RoomConfig> Rooms { get; set; } = new();
 
+    /// <summary>"!vote" options. Null = the YR set; options whose control is not in the layout are dropped.</summary>
+    public List<VoteOption>? VoteOptions { get; set; }
+
     public static BotConfig Load(string path)
     {
         var json = File.ReadAllText(path);
@@ -52,6 +55,7 @@ public sealed class BotConfig
 
 public sealed class ChatLogConfig
 {
+    /// <summary>Public chat logs the ident history is built from. Empty = no import (only YR has them).</summary>
     public string BaseUrl { get; set; } = "https://files.cncnet.org/logs/yr/ChatLogs/";
     /// <summary>First day to import. Logs on the server start in early 2022; earlier days 404 and are skipped.</summary>
     public string StartDate { get; set; } = "2022-01-01";
@@ -65,8 +69,13 @@ public sealed class ChatLogConfig
 
 public sealed class IrcConfig
 {
-    /// <summary>Game identifier used in the ident ("YR.xxxxxx") and channel names.</summary>
+    /// <summary>Game identifier used in the channel names (#cncnet-yr, #cncnet-ra, #cncnet-ts...).</summary>
     public string Game { get; set; } = "YR";
+    /// <summary>
+    /// IRC connections this bot may open, one per room. GameSurge allows 4 per IP and anything else on
+    /// the same IP counts too, so lower it when sharing. 0 = no limit.
+    /// </summary>
+    public int MaxConnections { get; set; } = 4;
     /// <summary>Client version string of the players (GAME field 1). Empty = learn it from other hosts' broadcasts.</summary>
     public string ClientVersion { get; set; } = "";
     /// <summary>Number of fields in the GAME broadcast (14 for the 9.3.5 client, 15 once the difficulty field ships). 0 = learn from other hosts.</summary>
@@ -124,11 +133,7 @@ public sealed class RoomConfig
     public int MinIdentAgeDays { get; set; } = 90;
     /// <summary>Noob rooms: treat a fresh ident on a long-known cloaked host as old.</summary>
     public bool UseHostAsFallback { get; set; } = true;
-    /// <summary>
-    /// Noob rooms: also kick a nick that was handed over from an older ident (a veteran on a new PC): another ident
-    /// played the nick on at least this many days, was first seen more than MaxIdentAgeDays ago, and went quiet when
-    /// the joining ident appeared. Shared names stay unaffected because their other users keep playing. 0 = ident only.
-    /// </summary>
+    /// <summary>Noob rooms: also refuse a nick handed over from an older ident that played it on this many days. 0 = off.</summary>
     public int NickHistoryMinDays { get; set; } = 30;
     /// <summary>Any tier: kick idents seen in the chat logs on fewer than this many days (a handed-over ident's days count). 0 = off.</summary>
     public int MinActiveDays { get; set; }

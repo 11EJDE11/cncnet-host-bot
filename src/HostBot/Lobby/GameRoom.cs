@@ -23,29 +23,20 @@ public sealed class ClientDialect
 }
 
 /// <summary>
-/// Hosts one CnCNet game room as a non-playing host: creates the channel, broadcasts it,
-/// admits or kicks joiners by ident policy, relays player options, and launches the game when
-/// everyone is ready. Protocol details: docs/protocol/*.md.
+/// One game room, hosted without playing: creates and broadcasts the channel, checks joiners,
+/// relays player options and starts the game when everyone is ready. See docs/protocol/.
 /// </summary>
 public sealed class GameRoom
 {
+    // IRC queue priorities. GameSurge sends about one line every 2-3 s, so order matters:
+    // chat first (a "kicked in 12 s" warning must arrive in time), then PO (a newcomer only starts
+    // its tunnel negotiations once it has the host's PO, and the others give it 10 s), then
+    // GO/PEO/GSETTINGS/lock, then the game list broadcast.
     private const int LaunchNoticePriority = 0;
-    /// <summary>
-    /// Countdown, cancel and ready-warning lines go ahead of everything, PO included: a "kicked in
-    /// 12 seconds" that queues behind a vote's GO, PO and GAME lines reaches the player with half
-    /// the fuse gone. One short chat line costs a join's PO at most 2.5 s, and such lines are rare.
-    /// </summary>
     private const int UrgentChatPriority = 23;
-    /// <summary>The GAME list broadcast; below the lobby state lines, a few seconds late in the list costs nothing.</summary>
-    private const int BroadcastPriority = 20;
-    /// <summary>GO, PEO, GSETTINGS and the channel lock go ahead of the broadcast and all chat.</summary>
-    private const int GameOptionsPriority = 21;
-    /// <summary>
-    /// PO goes first of all: a newcomer starts its tunnel negotiations only when the host's PO arrives,
-    /// while the others started theirs on the JOIN and give it only 10 s, so every second a PO sits
-    /// behind other lines is a second towards a failed pair.
-    /// </summary>
     private const int PlayerOptionsPriority = 22;
+    private const int GameOptionsPriority = 21;
+    private const int BroadcastPriority = 20;
 
     /// <summary>Live settings; swapped by RoomHost.Update so policy and timing changes apply at once.</summary>
     public RoomConfig Def { get; private set; }
@@ -111,28 +102,9 @@ public sealed class GameRoom
     /// <summary>Recently invited nicks, to attribute an INVITATION_FAILED reply: target nick -> inviter nick.</summary>
     private readonly Dictionary<string, string> _recentInvites = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Votable options: name -> (description when on, apply(on) values, read current state).</summary>
-    private static readonly (string name, string label, string control, string onValue, string offValue)[] VoteOptions =
-    {
-        ("sw",     "superweapons",   "cmbSuperWeaponsModifier", "0", "3"),
-        ("crates", "crates",         "chkCrates",               "true", "false"),
-        ("yuri",   "Yuri",           "chkNoYuri",               "false", "true"),
-        ("france", "France",         "chkNoFrance",             "false", "true"),
-        ("spy",    "spies",          "chkNoSpy",                "false", "true"),
-        ("ra2",    "RA2 mode",       "chkRA2Mode",              "true", "false"),
-        ("balance", "balance patch",  "chkBalancePatch",         "true", "false"),
-        ("random", "random sides",   "peoForceRandomSides",     "1", "0"),
-        ("spots",  "random spots",   "peoForceRandomStarts",    "1", "0"),
-    };
-    /// <summary>Vote options that work but are left out of the option lists in chat.</summary>
-    private static readonly HashSet<string> HiddenVoteOptions = new(StringComparer.OrdinalIgnoreCase) { "spots" };
-    /// <summary>Other words players use for a vote option.</summary>
-    private static readonly Dictionary<string, string> VoteOptionAliases = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["spot"] = "spots", ["starts"] = "spots", ["start"] = "spots", ["positions"] = "spots",
-    };
-    private static IEnumerable<(string name, string label, string control, string onValue, string offValue)> ListedVoteOptions =>
-        VoteOptions.Where(v => !HiddenVoteOptions.Contains(v.name));
+    private readonly List<VoteOption> _voteOptions;
+    private IEnumerable<VoteOption> ListedVoteOptions => _voteOptions.Where(v => !v.Hidden);
+    private DateTime _lastTeamNotice = DateTime.MinValue;
     /// <summary>Spots locked to Random (PEO bit 3): Def.ForceRandomStarts, flipped by a "!vote spots" until the next map.</summary>
     private bool _forceRandomStarts;
     /// <summary>Voted "random sides": PEO bit 0, which locks every client's side drop-down; all players are set to Random.</summary>
@@ -188,11 +160,12 @@ public sealed class GameRoom
     private bool HasEntryRule => Def.Tier != RoomTier.Open || Def.MinActiveDays > 0;
     /// <summary>Game mode in play: the configured one, or the Blitz mode while a !blitz vote is in effect.</summary>
     public string GameModeName => Mode?.Name ?? Def.GameMode;
-    private bool BlitzEnabled => !string.IsNullOrEmpty(Def.BlitzGameMode) && !Def.BlitzGameMode.Equals(Def.GameMode, StringComparison.OrdinalIgnoreCase);
+    private bool BlitzEnabled => !string.IsNullOrEmpty(Def.BlitzGameMode) && !Def.BlitzGameMode.Equals(Def.GameMode, StringComparison.OrdinalIgnoreCase)
+        && _pool.GameModes.Any(m => m.Name.Equals(Def.BlitzGameMode, StringComparison.OrdinalIgnoreCase));
     private bool InBlitz => BlitzEnabled && GameModeName.Equals(Def.BlitzGameMode, StringComparison.OrdinalIgnoreCase);
 
     public GameRoom(RoomConfig def, IrcClient irc, TunnelList tunnels, IdentPolicy policy, MapPoolFile pool,
-        OptionLayout layout, BotDb db, ClientDialect dialect, string game)
+        OptionLayout layout, BotDb db, ClientDialect dialect, string game, IEnumerable<VoteOption> voteOptions)
     {
         Def = def;
         _irc = irc;
@@ -200,6 +173,7 @@ public sealed class GameRoom
         _policy = policy;
         _pool = pool;
         _layout = layout;
+        _voteOptions = voteOptions.Where(v => v.IsFlag || layout.IsCheckBox(v.Option) || layout.IsDropDown(v.Option)).ToList();
         _db = db;
         _dialect = dialect;
         _game = game;
@@ -756,7 +730,9 @@ public sealed class GameRoom
         switch (cmd)
         {
             case "!help":
-                SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle options, several at once: !vote sw france), !rules"
+                SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map)"
+                         + (ListedVoteOptions.Any() ? $", !vote {string.Join("|", ListedVoteOptions.Select(v => v.Name))} (toggle options, several at once)" : "")
+                         + ", !rules"
                          + (BlitzEnabled ? $", !blitz (vote to switch to {Def.BlitzGameMode} maps{(InBlitz ? $" and back to {Def.GameMode}" : "")})" : "")
                          + (Def.VoteKickBanHours > 0 ? ", !votekick <nick> (half of the other players remove a player)" : "")
                          + (Def.AllowInvites && HasEntryRule ? ", !invite <nick> (let a player in who the ident check would refuse)" : "")
@@ -989,18 +965,20 @@ public sealed class GameRoom
             SendChat("Voting is off in this room.");
             return;
         }
-        var chosen = new List<(string name, string label, string control, string onValue, string offValue)>();
+        var chosen = new List<VoteOption>();
         var unknown = new List<string>();
         foreach (var option in options)
         {
-            string name = VoteOptionAliases.GetValueOrDefault(option, option);
-            var opt = VoteOptions.FirstOrDefault(v => v.name.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (opt.name is null) unknown.Add(option);
+            var opt = _voteOptions.FirstOrDefault(v => v.Name.Equals(option, StringComparison.OrdinalIgnoreCase)
+                                                       || v.Aliases.Contains(option, StringComparer.OrdinalIgnoreCase));
+            if (opt is null) unknown.Add(option);
             else if (!chosen.Contains(opt)) chosen.Add(opt);
         }
         if (chosen.Count == 0)
         {
-            SendChat("Vote options: " + string.Join(", ", ListedVoteOptions.Select(v => $"!vote {v.name} ({v.label} {(IsVoteOptionOn(v) ? "on" : "off")})")) + $". {Def.VotesNeeded} votes flip an option for this game; several at once: !vote sw france.");
+            SendChat(ListedVoteOptions.Any()
+                ? "Vote options: " + string.Join(", ", ListedVoteOptions.Select(v => $"!vote {v.Name} ({v.Label} {(IsVoteOptionOn(v) ? "on" : "off")})")) + $". {Def.VotesNeeded} votes flip an option for this game; several at once work too."
+                : "There is nothing to vote on in this room.");
             return;
         }
 
@@ -1009,25 +987,25 @@ public sealed class GameRoom
         var passed = new List<string>();
         foreach (var opt in chosen)
         {
-            if (!_votes.TryGetValue(opt.name, out var voters))
-                _votes[opt.name] = voters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!_votes.TryGetValue(opt.Name, out var voters))
+                _votes[opt.Name] = voters = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             voters.Add(p.Nick);
             bool turnOn = !IsVoteOptionOn(opt);
-            string change = $"{opt.label} {(turnOn ? "on" : "off")}";
+            string change = $"{opt.Label} {(turnOn ? "on" : "off")}";
             if (voters.Count < needed)
             {
                 tally.Add($"{change} ({voters.Count}/{needed})");
                 continue;
             }
             voters.Clear();
-            if (opt.control == "peoForceRandomSides")
+            if (opt.Option == VoteOption.RandomSides)
             {
                 _forceRandomSides = turnOn;
                 if (turnOn)
                     foreach (var x in Players) x.SideId = 0;
                 SendPlayerExtraOptions();
             }
-            else if (opt.control == "peoForceRandomStarts")
+            else if (opt.Option == VoteOption.RandomStarts)
             {
                 _forceRandomStarts = turnOn;
                 if (turnOn)
@@ -1035,9 +1013,9 @@ public sealed class GameRoom
                 SendPlayerExtraOptions();
             }
             else
-                Options.Apply(new[] { new KeyValuePair<string, string>(opt.control, turnOn ? opt.onValue : opt.offValue) }, "vote");
+                Options.Apply(new[] { new KeyValuePair<string, string>(opt.Option, turnOn ? opt.On : opt.Off) }, "vote");
             passed.Add(change);
-            _db.LogEvent(Def.Id, "vote", p.Nick, p.Ident, p.Host, $"{opt.name} {(turnOn ? "on" : "off")}");
+            _db.LogEvent(Def.Id, "vote", p.Nick, p.Ident, p.Host, $"{opt.Name} {(turnOn ? "on" : "off")}");
         }
 
         if (passed.Count > 0)
@@ -1052,7 +1030,7 @@ public sealed class GameRoom
         if (tally.Count > 0)
             line.Append(line.Length > 0 ? " " : "").Append($"{p.Nick} votes to turn {string.Join(", ", tally)}.");
         if (unknown.Count > 0)
-            line.Append($" Unknown: {string.Join(", ", unknown)} (options: {string.Join(" ", ListedVoteOptions.Select(v => v.name))}).");
+            line.Append($" Unknown: {string.Join(", ", unknown)} (options: {string.Join(" ", ListedVoteOptions.Select(v => v.Name))}).");
         SendChat(line.ToString());
     }
 
@@ -1141,11 +1119,11 @@ public sealed class GameRoom
             : $"Invitation sent to {target.Nick}; they may join this room for the next {days} days.");
     }
 
-    private bool IsVoteOptionOn((string name, string label, string control, string onValue, string offValue) opt) =>
-        opt.control == "peoForceRandomSides" ? _forceRandomSides
-        : opt.control == "peoForceRandomStarts" ? _forceRandomStarts
-        : opt.control.StartsWith("chk") ? Options.IsChecked(opt.control) == (opt.onValue == "true")
-        : Options.DropDownIndex(opt.control).ToString() == opt.onValue;
+    private bool IsVoteOptionOn(VoteOption opt) =>
+        opt.Option == VoteOption.RandomSides ? _forceRandomSides
+        : opt.Option == VoteOption.RandomStarts ? _forceRandomStarts
+        : _layout.IsCheckBox(opt.Option) ? Options.IsChecked(opt.Option) == opt.On.Equals("true", StringComparison.OrdinalIgnoreCase)
+        : Options.DropDownIndex(opt.Option).ToString() == opt.On;
 
     private void HandlePrivateMessage(string nick, string? ident, string text)
     {
@@ -1254,13 +1232,9 @@ public sealed class GameRoom
     }
 
     /// <summary>
-    /// A failed tunnel pair never recovers unless its keepalive comes back, and players rarely
-    /// ready up while their client shows a failed negotiation. So, independent of readiness: once a
-    /// pair has been failed for 5 s, ask the clients to redo their negotiations (the host's
-    /// /renegotiate), at most once a minute. Like the stock host it holds off while another pair
-    /// is still negotiating (a RENEGALL tears that round down and its stale packets corrupt the
-    /// next one), but not for longer than 30 s, as a one-sided report can leave a pair at
-    /// InProgress for good.
+    /// A failed tunnel pair rarely recovers by itself, so 5 s after a failure ask everyone to
+    /// renegotiate (RENEGALL), at most once a minute. Wait while another pair is still negotiating,
+    /// since RENEGALL would break that round, but no longer than 30 s.
     /// </summary>
     private void MaintainNegotiations(DateTime now)
     {
@@ -1545,6 +1519,18 @@ public sealed class GameRoom
 
     // ---- launching -------------------------------------------------------------------------------
 
+    /// <summary>Without auto-ally the players pick teams themselves; the game must still be two even teams.</summary>
+    private string? TeamProblem(List<Player> humans)
+    {
+        if (ActiveMapping is not null || humans.Count < 4)
+            return null;
+        int size = humans.Count / 2;
+        var teams = humans.GroupBy(p => p.TeamId).ToList();
+        if (humans.Count % 2 == 0 && teams.Count == 2 && teams.All(t => t.Key > 0 && t.Count() == size))
+            return null;
+        return $"teams must be {size} vs {size}: pick a team in the team list";
+    }
+
     private void TryLaunch(DateTime now)
     {
         int minPlayers = MinPlayersToStart;
@@ -1562,6 +1548,17 @@ public sealed class GameRoom
                     reason += " (just joined: choose Spectator in the side list, then press Ready)";
             }
             CancelCountdown(reason);
+            return;
+        }
+
+        if (TeamProblem(humans) is { } teams)
+        {
+            CancelCountdown(teams);
+            if (now - _lastTeamNotice > TimeSpan.FromSeconds(30))
+            {
+                _lastTeamNotice = now;
+                SendChat($"Everyone is ready, but {teams}.");
+            }
             return;
         }
 

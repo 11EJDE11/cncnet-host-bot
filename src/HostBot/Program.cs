@@ -10,6 +10,7 @@ public static class Program
         hostbot idents import [config.json]    download / refresh the chat logs into the ident database
         hostbot idents check <ident> [config]  show what the policy knows about an ident
         hostbot maps build <game dir> [out]    build gamedata/maps.json from a game install (INI/MPMaps.ini + Maps/)
+        hostbot options build <game dir> [out] build gamedata/options.json from the client package's lobby INIs
         hostbot capture [host nick] [config] [room password]
                                                connect, print GAME broadcasts (client version / field count) and, with a
                                                host nick, join that room and print its GO/PO/PEO so the option layout can be checked
@@ -40,6 +41,12 @@ public static class Program
                     if (Arg(list, 1, "") != "build" || list.Count < 3)
                         break;
                     Maps.MapPoolBuilder.Build(list[2], Arg(list, 3, "gamedata/maps.json"));
+                    return 0;
+
+                case "options":
+                    if (Arg(list, 1, "") != "build" || list.Count < 3)
+                        break;
+                    Maps.OptionLayoutBuilder.Write(Maps.OptionLayoutBuilder.Build(list[2]), Arg(list, 3, "gamedata/options.json"));
                     return 0;
 
                 case "capture":

@@ -30,6 +30,8 @@ public sealed partial class ChatLogImporter
     /// </summary>
     public async Task ImportAsync(DateOnly from, int refreshDays, CancellationToken ct)
     {
+        if (_baseUrl == "/")
+            return; // chatLogs.baseUrl is empty: this game has no public logs
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var refreshFrom = today.AddDays(-refreshDays);
         int imported = 0, missing = 0, skipped = 0;
