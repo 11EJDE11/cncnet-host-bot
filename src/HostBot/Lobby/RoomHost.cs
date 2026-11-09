@@ -70,7 +70,7 @@ public sealed class RoomHost
     {
         Def = def;
         if (Room is { } room)
-            room.Def = def;
+            room.UpdateDef(def);
     }
 
     private async Task RunAsync(CancellationToken ct)

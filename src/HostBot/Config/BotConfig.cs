@@ -163,6 +163,11 @@ public sealed class RoomConfig
     public double NextMapPenalty { get; set; } = 0.25;
     /// <summary>Auto-ally: send the map's team start mapping so teams follow start positions (players pick a spot, not a team).</summary>
     public bool UseTeamStartMappings { get; set; } = true;
+    /// <summary>
+    /// Lock every player's spot to Random (the client's "force random starts"); with auto-ally that also makes the
+    /// teams random. "!vote spots" flips it for the current map; each new map starts from this setting again.
+    /// </summary>
+    public bool ForceRandomStarts { get; set; }
     /// <summary>When the room is full, a player who is still not ready after this many seconds is warned.</summary>
     public int ReadyGraceSeconds { get; set; } = 20;
     /// <summary>Seconds between the warning and the kick. 0 disables the ready kick.</summary>

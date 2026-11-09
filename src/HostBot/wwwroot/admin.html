@@ -17,7 +17,7 @@
   section { display:none; } section.active { display:block; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px; margin-bottom:12px; }
   .grid { display:grid; grid-template-columns:1fr; gap:12px; }
-  .chat.small { max-height:180px; font-size:13px; margin:6px 0; }
+  .chat.small { max-height:360px; font-size:13px; margin:6px 0; }
   @media (max-width:600px) { .grid { grid-template-columns:1fr; } main { padding:16px 16px; } }
   table { width:100%; border-collapse:collapse; font-size:13px; }
   th, td { text-align:left; padding:4px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
@@ -180,7 +180,7 @@ async function refreshStatus() {
 const roomChat = {};
 async function loadRoomChats() {
   await Promise.all(status.rooms.map(async h => {
-    try { roomChat[h.def.id] = await get(`api/chat?limit=10&room=${encodeURIComponent(h.def.id)}&channel=%23`); } catch { } // newest first
+    try { roomChat[h.def.id] = await get(`api/chat?limit=100&room=${encodeURIComponent(h.def.id)}&channel=%23`); } catch { } // newest first
   }));
 }
 function renderRooms() {
@@ -234,7 +234,7 @@ let chatAfter = 0;
 async function refreshChat(reset) {
   if (reset) { chatAfter = 0; $('#chatLog').innerHTML = ''; }
   const room = $('#chatRoom').value, ch = $('#chatChannel').value.trim();
-  const rows = await get(`api/chat?limit=300${room ? '&room=' + encodeURIComponent(room) : ''}${ch ? '&channel=' + encodeURIComponent(ch) : ''}&after=${chatAfter}`);
+  const rows = await get(`api/chat?limit=1000${room ? '&room=' + encodeURIComponent(room) : ''}${ch ? '&channel=' + encodeURIComponent(ch) : ''}&after=${chatAfter}`);
   rows.reverse();
   const box = $('#chatLog');
   const atBottom = reset || box.scrollHeight - box.scrollTop - box.clientHeight < 40;

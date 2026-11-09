@@ -48,7 +48,23 @@ public sealed class GameRoom
     private const int PlayerOptionsPriority = 22;
 
     /// <summary>Live settings; swapped by RoomHost.Update so policy and timing changes apply at once.</summary>
-    public RoomConfig Def { get; set; }
+    public RoomConfig Def { get; private set; }
+
+    /// <summary>A settings edit from the admin page: most settings are read where used; a changed spot rule is sent at once.</summary>
+    public void UpdateDef(RoomConfig def)
+    {
+        lock (_gate)
+        {
+            bool spotsChanged = def.ForceRandomStarts != Def.ForceRandomStarts;
+            Def = def;
+            if (!spotsChanged || !_roomJoined || Closed) return;
+            _forceRandomStarts = def.ForceRandomStarts;
+            if (_forceRandomStarts)
+                foreach (var p in Players) p.StartingLocation = 0;
+            SendPlayerExtraOptions();
+            if (Players.Count > 0) SendPlayerOptions();
+        }
+    }
     public string Tag => $"room:{Def.Nick}";
 
     private readonly IrcClient _irc;
@@ -106,7 +122,19 @@ public sealed class GameRoom
         ("ra2",    "RA2 mode",       "chkRA2Mode",              "true", "false"),
         ("balance", "balance patch",  "chkBalancePatch",         "true", "false"),
         ("random", "random sides",   "peoForceRandomSides",     "1", "0"),
+        ("spots",  "random spots",   "peoForceRandomStarts",    "1", "0"),
     };
+    /// <summary>Vote options that work but are left out of the option lists in chat.</summary>
+    private static readonly HashSet<string> HiddenVoteOptions = new(StringComparer.OrdinalIgnoreCase) { "spots" };
+    /// <summary>Other words players use for a vote option.</summary>
+    private static readonly Dictionary<string, string> VoteOptionAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["spot"] = "spots", ["starts"] = "spots", ["start"] = "spots", ["positions"] = "spots",
+    };
+    private static IEnumerable<(string name, string label, string control, string onValue, string offValue)> ListedVoteOptions =>
+        VoteOptions.Where(v => !HiddenVoteOptions.Contains(v.name));
+    /// <summary>Spots locked to Random (PEO bit 3): Def.ForceRandomStarts, flipped by a "!vote spots" until the next map.</summary>
+    private bool _forceRandomStarts;
     /// <summary>Voted "random sides": PEO bit 0, which locks every client's side drop-down; all players are set to Random.</summary>
     private bool _forceRandomSides;
     private DateTime? _failedSince;
@@ -704,6 +732,8 @@ public sealed class GameRoom
             team = 0; // teams follow start positions; the clients' team drop-down is disabled anyway
         if (_forceRandomSides && !wantsSpectator)
             side = 0;
+        if (_forceRandomStarts)
+            start = 0; // the clients' spot drop-down is locked to Random; a stale request must not take a spot
         // Unlike the stock host, a spot/side/colour change does not un-ready anyone: players may
         // adjust during the countdown and the game starts with whatever they chose.
         if (wantsSpectator != IsSpectator(p))
@@ -963,13 +993,14 @@ public sealed class GameRoom
         var unknown = new List<string>();
         foreach (var option in options)
         {
-            var opt = VoteOptions.FirstOrDefault(v => v.name.Equals(option, StringComparison.OrdinalIgnoreCase));
+            string name = VoteOptionAliases.GetValueOrDefault(option, option);
+            var opt = VoteOptions.FirstOrDefault(v => v.name.Equals(name, StringComparison.OrdinalIgnoreCase));
             if (opt.name is null) unknown.Add(option);
             else if (!chosen.Contains(opt)) chosen.Add(opt);
         }
         if (chosen.Count == 0)
         {
-            SendChat("Vote options: " + string.Join(", ", VoteOptions.Select(v => $"!vote {v.name} ({v.label} {(IsVoteOptionOn(v) ? "on" : "off")})")) + $". {Def.VotesNeeded} votes flip an option for this game; several at once: !vote sw france.");
+            SendChat("Vote options: " + string.Join(", ", ListedVoteOptions.Select(v => $"!vote {v.name} ({v.label} {(IsVoteOptionOn(v) ? "on" : "off")})")) + $". {Def.VotesNeeded} votes flip an option for this game; several at once: !vote sw france.");
             return;
         }
 
@@ -996,6 +1027,13 @@ public sealed class GameRoom
                     foreach (var x in Players) x.SideId = 0;
                 SendPlayerExtraOptions();
             }
+            else if (opt.control == "peoForceRandomStarts")
+            {
+                _forceRandomStarts = turnOn;
+                if (turnOn)
+                    foreach (var x in Players) x.StartingLocation = 0;
+                SendPlayerExtraOptions();
+            }
             else
                 Options.Apply(new[] { new KeyValuePair<string, string>(opt.control, turnOn ? opt.onValue : opt.offValue) }, "vote");
             passed.Add(change);
@@ -1014,7 +1052,7 @@ public sealed class GameRoom
         if (tally.Count > 0)
             line.Append(line.Length > 0 ? " " : "").Append($"{p.Nick} votes to turn {string.Join(", ", tally)}.");
         if (unknown.Count > 0)
-            line.Append($" Unknown: {string.Join(", ", unknown)} (options: {string.Join(" ", VoteOptions.Select(v => v.name))}).");
+            line.Append($" Unknown: {string.Join(", ", unknown)} (options: {string.Join(" ", ListedVoteOptions.Select(v => v.name))}).");
         SendChat(line.ToString());
     }
 
@@ -1105,6 +1143,7 @@ public sealed class GameRoom
 
     private bool IsVoteOptionOn((string name, string label, string control, string onValue, string offValue) opt) =>
         opt.control == "peoForceRandomSides" ? _forceRandomSides
+        : opt.control == "peoForceRandomStarts" ? _forceRandomStarts
         : opt.control.StartsWith("chk") ? Options.IsChecked(opt.control) == (opt.onValue == "true")
         : Options.DropDownIndex(opt.control).ToString() == opt.onValue;
 
@@ -1206,7 +1245,8 @@ public sealed class GameRoom
         // Bits: forceRandomSides, forceRandomColors, forceNoTeams, forceRandomStarts, useTeamStartMappings.
         // The client ticks "no teams" together with "use team start mappings"; only that flag disables the team drop-down.
         char rs = _forceRandomSides ? '1' : '0';
-        string peo = m is null ? $"PEO {rs}0000;" : $"PEO {rs}0101;{m.Mapping}";
+        char rp = _forceRandomStarts ? '1' : '0';
+        string peo = m is null ? $"PEO {rs}00{rp}0;" : $"PEO {rs}01{rp}1;{m.Mapping}";
         if (!force && peo == _lastPeo)
             return; // every line costs ~2.5 s of GameSurge's per-connection budget; identical PEO carries nothing new
         _lastPeo = peo;
@@ -1486,6 +1526,7 @@ public sealed class GameRoom
         _mapVotes.Clear();
         _modeVotes.Clear();
         _forceRandomSides = false;
+        _forceRandomStarts = Def.ForceRandomStarts;
         _fullCountdownShown = false;
         _recentMaps.Add(map.BaseFilePath);
         while (_recentMaps.Count > Math.Min(10, poolSize - 1))
@@ -1498,7 +1539,7 @@ public sealed class GameRoom
         Options.Apply(map.ForcedOptions, $"map {map.Name}");
 
         foreach (var p in Players)
-            if (p.StartingLocation > map.MaxPlayers)
+            if (_forceRandomStarts || p.StartingLocation > map.MaxPlayers)
                 p.StartingLocation = 0;
     }
 
