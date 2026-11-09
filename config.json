@@ -66,6 +66,7 @@
       "maxIdentAgeDays": 90,
       "minIdentAgeDays": 90,
       "useHostAsFallback": true,
+      "minActiveDays": 15,
       "kickMessage": null,
       "gameMode": "Battle",
       "maxPlayers": 4,

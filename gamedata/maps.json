@@ -1,6 +1,6 @@
 {
   "sourceGameDir": "C:\\Users\\QWE\\Desktop\\Red Alert 2x\\Game",
-  "builtAt": "2026-11-07T08:48:19.9603654Z",
+  "builtAt": "2026-11-07T23:19:58.2894244Z",
   "gameModes": [
     {
       "name": "Battle",
@@ -6458,7 +6458,7 @@
       "baseFilePath": "Maps\\Yuri\u0027s Revenge\\xmp20mw",
       "name": "[6] Wild Animal Park",
       "author": "Westwood Studios",
-      "sha1": "1d2e989899bfcb7d5f943ad0d450ce8f6a04179e",
+      "sha1": "8f2e1d27196890a248061a8fef0472f0daf09ae8",
       "gameModes": [
         "Megawealth"
       ],
@@ -6478,7 +6478,7 @@
       "baseFilePath": "Maps\\Yuri\u0027s Revenge\\xmp20t6",
       "name": "[6] Wild Animal Park",
       "author": "Westwood Studios",
-      "sha1": "144b045b85d3d6c8a9212247dabeb33a828eb27e",
+      "sha1": "2268902c53d814ccea734d1744cb77a24c7732ec",
       "gameModes": [
         "Battle",
         "Free For All",
@@ -9495,7 +9495,7 @@
       "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\2_the_challenger_v1_dctanxman",
       "name": "[2] The Challenger v1",
       "author": "Dctanxman",
-      "sha1": "b7ac8c658127980e0d85763d80341a430cef8821",
+      "sha1": "85fe87bb1e861e8843ff72564ffd8fc48e71ed94",
       "gameModes": [
         "Survival"
       ],
@@ -9531,7 +9531,7 @@
       "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\2_the_challenger_v2_dctanxman",
       "name": "[2] The Challenger v2",
       "author": "Dctanxman",
-      "sha1": "3d84b9c287570d0e8e4a2e273c90bfd43772b78e",
+      "sha1": "b8aa7cf54014cfc59f471eda1482f10dbaf1d3db",
       "gameModes": [
         "Survival"
       ],
@@ -10216,6 +10216,167 @@
         "cmbSuperWeaponsModifier": "2",
         "cmbGameSpeedCapMultiplayer": "2",
         "chkCrates": "true"
+      }
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\2_eclipsed_horizons_kinghani",
+      "name": "[2] Eclipsed Horizons",
+      "author": "KingHani",
+      "sha1": "b5109bdf967964967e967ca7155cc86111451916",
+      "gameModes": [
+        "Survival"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 3,
+      "enforceMaxPlayers": true,
+      "waypoints": 3,
+      "teamStartMappings": [],
+      "forcedOptions": {
+        "chkNoSpy": "false",
+        "chkCrates": "false",
+        "chkNoYuri": "false",
+        "chkRA2Mode": "false",
+        "cmbCredits": "0",
+        "chkBrutalAI": "false",
+        "chkMultiEng": "false",
+        "chkNoFrance": "false",
+        "chkRedeplMCV": "true",
+        "chkBuildOffAlly": "false",
+        "chkShortGame": "true",
+        "chkAutoRepair": "true",
+        "cmbAIModifier": "0",
+        "chkBalancePatch": "false",
+        "chkDestrBridges": "false",
+        "chkNoDogEngiEat": "false",
+        "chkNoStolenTech": "false",
+        "cmbGameSpeedCap": "2",
+        "cmbStartingUnits": "0",
+        "chkNoYuriNoFrance": "false",
+        "cmbCratesModifier": "1",
+        "chkNoSpawnPreviews": "false",
+        "cmbGameSpeedCapSkirmish": "2",
+        "cmbGameSpeedCapMultiplayer": "2"
+      }
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\4_eclipsed_horizons_kinghani",
+      "name": "[4] Eclipsed Horizons",
+      "author": "KingHani",
+      "sha1": "1489e603a7df03f0170fd1ae720b82ac9a9f8be1",
+      "gameModes": [
+        "Survival"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 5,
+      "enforceMaxPlayers": true,
+      "waypoints": 5,
+      "teamStartMappings": [],
+      "forcedOptions": {
+        "chkNoSpy": "false",
+        "chkCrates": "false",
+        "chkNoYuri": "false",
+        "chkRA2Mode": "false",
+        "cmbCredits": "0",
+        "chkBrutalAI": "false",
+        "chkMultiEng": "false",
+        "chkNoFrance": "false",
+        "chkRedeplMCV": "true",
+        "chkBuildOffAlly": "false",
+        "chkShortGame": "true",
+        "chkAutoRepair": "true",
+        "cmbAIModifier": "0",
+        "chkBalancePatch": "false",
+        "chkDestrBridges": "false",
+        "chkNoDogEngiEat": "false",
+        "chkNoStolenTech": "false",
+        "cmbGameSpeedCap": "2",
+        "cmbStartingUnits": "0",
+        "chkNoYuriNoFrance": "false",
+        "cmbCratesModifier": "1",
+        "chkNoSpawnPreviews": "false",
+        "cmbGameSpeedCapSkirmish": "2",
+        "cmbGameSpeedCapMultiplayer": "2"
+      }
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\5_tvsb_survival_rdf_dctanxman",
+      "name": "[5] T Vs B  Survival - RDF Mod",
+      "author": "Dctanxman",
+      "sha1": "80b10975a5e739f2f494bb13c910f951517e8e84",
+      "gameModes": [
+        "Survival"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 6,
+      "enforceMaxPlayers": true,
+      "waypoints": 6,
+      "teamStartMappings": [],
+      "forcedOptions": {
+        "chkAutoRepair": "true",
+        "chkMultiEng": "false",
+        "chkRA2Mode": "false",
+        "chkBalancePatch": "false",
+        "chkNoSpawnPreviews": "false",
+        "chkNoYuri": "false",
+        "chkNoFrance": "false",
+        "chkNoSpy": "false",
+        "chkNoStolenTech": "false",
+        "chkNoDogEngiEat": "false",
+        "chkNoYuriNoFrance": "false"
+      }
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\4_loktak_survival_rdf_dctanxman",
+      "name": "[4] Loktak Survival - RDF Mod",
+      "author": "Dctanxman",
+      "sha1": "8c0c798936652473c72bc7a5c9beb103052d52e6",
+      "gameModes": [
+        "Survival"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 5,
+      "enforceMaxPlayers": true,
+      "waypoints": 5,
+      "teamStartMappings": [],
+      "forcedOptions": {
+        "chkAutoRepair": "true",
+        "chkMultiEng": "false",
+        "chkRA2Mode": "false",
+        "chkBalancePatch": "false",
+        "chkNoSpawnPreviews": "false",
+        "chkNoYuri": "false",
+        "chkNoFrance": "false",
+        "chkNoSpy": "false",
+        "chkNoStolenTech": "false",
+        "chkNoDogEngiEat": "false",
+        "chkNoYuriNoFrance": "false"
+      }
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\Survival\\2_coldwar_survival_rdf_dctanxman",
+      "name": "[2] ColdWar Survival - RDF Mod",
+      "author": "Dctanxman",
+      "sha1": "4a61cf91309384f07e62695784e2299cc7eee990",
+      "gameModes": [
+        "Survival"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 3,
+      "enforceMaxPlayers": true,
+      "waypoints": 3,
+      "teamStartMappings": [],
+      "forcedOptions": {
+        "chkAutoRepair": "true",
+        "chkMultiEng": "false",
+        "chkRA2Mode": "false",
+        "chkBalancePatch": "false",
+        "chkNoSpawnPreviews": "false",
+        "chkNoYuri": "false",
+        "chkNoFrance": "false",
+        "chkNoSpy": "false",
+        "chkNoStolenTech": "false",
+        "chkNoDogEngiEat": "false",
+        "chkNoYuriNoFrance": "false"
       }
     },
     {
@@ -12385,6 +12546,67 @@
         {
           "name": "Top vs Bottom",
           "mapping": "A,A,A,A,B,B,B,B"
+        }
+      ],
+      "forcedOptions": {}
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\2_panic_in_kazakhstan",
+      "name": "[2] Panic in Kazakhstan",
+      "author": "Madness",
+      "sha1": "47887af299c75ab3325baa5ba1f346f355cfa779",
+      "gameModes": [
+        "Battle",
+        "YR Ladder"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 2,
+      "enforceMaxPlayers": true,
+      "waypoints": 2,
+      "teamStartMappings": [],
+      "forcedOptions": {}
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\2_unearthed",
+      "name": "[2] Unearthed",
+      "author": "Madness",
+      "sha1": "6ab5f649d9b02201d0fdc3a9d4295ea71690b56e",
+      "gameModes": [
+        "Battle",
+        "YR Ladder",
+        "RA2 Ladder"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 2,
+      "enforceMaxPlayers": true,
+      "waypoints": 2,
+      "teamStartMappings": [],
+      "forcedOptions": {}
+    },
+    {
+      "baseFilePath": "Maps\\Yuri\u0027s Revenge\\blitz_phasing_worlds_2v2",
+      "name": "[4] Phasing Worlds",
+      "author": "Madness",
+      "sha1": "6999242708aefae75d21313149901cdbad8fdc0d",
+      "gameModes": [
+        "Blitz 2v2"
+      ],
+      "minPlayers": 1,
+      "maxPlayers": 4,
+      "enforceMaxPlayers": true,
+      "waypoints": 4,
+      "teamStartMappings": [
+        {
+          "name": "2v2 LvR",
+          "mapping": "A,A,B,B"
+        },
+        {
+          "name": "1v1 LvR",
+          "mapping": "A,x,B,x"
+        },
+        {
+          "name": "1v1 LvR alt",
+          "mapping": "x,A,x,B"
         }
       ],
       "forcedOptions": {}

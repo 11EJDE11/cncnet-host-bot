@@ -90,7 +90,7 @@ public static class Program
                     : $"{h.Ident}: first {h.FirstSeen:yyyy-MM-dd}, last {h.LastSeen:yyyy-MM-dd}, {h.Days} days, last nick {h.LastNick}, host {h.LastHost}");
                 foreach (var room in cfg.Rooms)
                 {
-                    var v = policy.Evaluate(ident, h?.LastHost, room.Id, room.Tier, room.MaxIdentAgeDays, room.MinIdentAgeDays, room.UseHostAsFallback, h?.LastNick, room.NickHistoryMinDays);
+                    var v = policy.Evaluate(ident, h?.LastHost, room.Id, room.Tier, room.MaxIdentAgeDays, room.MinIdentAgeDays, room.UseHostAsFallback, h?.LastNick, room.NickHistoryMinDays, room.MinActiveDays);
                     Console.WriteLine($"  {room.Name} ({room.Tier}): {(v.Allowed ? "allowed" : "KICK")} - {v.Reason}");
                 }
                 return 0;

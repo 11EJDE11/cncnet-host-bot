@@ -152,8 +152,12 @@ public sealed class GameRoom
     private const int SpectateGraceSeconds = 30;
     /// <summary>!mappick votes: map section name -> voters.</summary>
     private readonly Dictionary<string, HashSet<string>> _mapVotes = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>!votekick votes: target nick -> voters.</summary>
+    private readonly Dictionary<string, HashSet<string>> _kickVotes = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>!blitz voters; only those still in the room count.</summary>
     private readonly HashSet<string> _modeVotes = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>Whether joining is gated at all (tier rule or activity floor), so !invite has something to override.</summary>
+    private bool HasEntryRule => Def.Tier != RoomTier.Open || Def.MinActiveDays > 0;
     /// <summary>Game mode in play: the configured one, or the Blitz mode while a !blitz vote is in effect.</summary>
     public string GameModeName => Mode?.Name ?? Def.GameMode;
     private bool BlitzEnabled => !string.IsNullOrEmpty(Def.BlitzGameMode) && !Def.BlitzGameMode.Equals(Def.GameMode, StringComparison.OrdinalIgnoreCase);
@@ -340,6 +344,8 @@ public sealed class GameRoom
                 SendPrivateMessage(nick, reason);
             if (ban && !string.IsNullOrEmpty(host))
                 _ = _irc.SendNowAsync($"MODE {Channel} +b *!*@{host}");
+            if (ban && p?.Ident is not null)
+                _policy.Ban(p.Ident, Def.Id, TimeSpan.FromHours(24), "an admin"); // outlives the channel ban, which ends with this room instance
             _ = _irc.SendNowAsync($"KICK {Channel} {nick}");
             _db.LogEvent(Def.Id, ban ? "ban" : "kick", nick, p?.Ident, host, reason);
             if (p is not null)
@@ -510,7 +516,7 @@ public sealed class GameRoom
         if (FindPlayer(nick) is not null)
             return;
 
-        var verdict = _policy.Evaluate(ident ?? "", host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback, nick, Def.NickHistoryMinDays);
+        var verdict = _policy.Evaluate(ident ?? "", host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback, nick, Def.NickHistoryMinDays, Def.MinActiveDays);
         string identInfo = verdict.History is { } h ? $"first seen {h.FirstSeen:yyyy-MM-dd}, {h.Days} days, last nick {h.LastNick}" : "no history";
         if (!verdict.Allowed)
         {
@@ -564,6 +570,7 @@ public sealed class GameRoom
     {
         Players.Remove(p);
         Negotiations.RemovePlayer(p.Nick);
+        _kickVotes.Remove(p.Nick);
         _fullCountdownShown = false;
         Log.Info(Tag, $"{how}: {p.Nick}; {Humans}/{MaxPlayers}{(Spectators > 0 ? $" +{Spectators} spectators" : "")}");
         if (Humans <= MaxPlayers)
@@ -721,7 +728,8 @@ public sealed class GameRoom
             case "!help":
                 SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map), !vote sw|crates|yuri|france|spy|ra2|balance|random (toggle options, several at once: !vote sw france), !rules"
                          + (BlitzEnabled ? $", !blitz (vote to switch to {Def.BlitzGameMode} maps{(InBlitz ? $" and back to {Def.GameMode}" : "")})" : "")
-                         + (Def.AllowInvites && Def.Tier != RoomTier.Open ? ", !invite <nick> (let a player in who the ident check would refuse)" : "")
+                         + (Def.VoteKickBanHours > 0 ? ", !votekick <nick> (half of the other players remove a player)" : "")
+                         + (Def.AllowInvites && HasEntryRule ? ", !invite <nick> (let a player in who the ident check would refuse)" : "")
                          + (SpectatorSeats > 0 ? ". To watch, choose Spectator in the side list." : "."));
                 break;
             case "!mappick" when p is not null && CurrentMatchId is null:
@@ -730,6 +738,9 @@ public sealed class GameRoom
                 break;
             case "!invite" when p is not null:
                 HandleInvite(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
+                break;
+            case "!votekick" when p is not null && CurrentMatchId is null && Def.VoteKickBanHours > 0:
+                HandleVoteKick(p, text.Split(' ', StringSplitOptions.RemoveEmptyEntries).Skip(1).FirstOrDefault());
                 break;
             case "!blitz" when p is not null && CurrentMatchId is null:
                 if (DateTime.UtcNow - _mapChangedAt >= TimeSpan.FromSeconds(5))
@@ -742,12 +753,12 @@ public sealed class GameRoom
                 SendChat($"Map: {Map?.Name} ({Mode?.Name}), {Humans}/{MaxPlayers} players{(Spectators > 0 ? $" + {Spectators} spectating" : "")}. Game starts when everyone is ready.");
                 break;
             case "!rules":
-                SendChat(Def.Tier switch
+                SendChat((Def.Tier switch
                 {
                     RoomTier.Noob => $"Beginner room: players whose ident{(Def.NickHistoryMinDays > 0 ? " or nick" : "")} has been seen on CnCNet for more than {Def.MaxIdentAgeDays} days are kicked.",
                     RoomTier.Pro => $"Pro room: players whose ident has been seen on CnCNet for less than {Def.MinIdentAgeDays} days are kicked.",
-                    _ => "Open room: anyone may play.",
-                });
+                    _ => Def.MinActiveDays > 0 ? "Open room." : "Open room: anyone may play.",
+                }) + (Def.MinActiveDays > 0 ? $" Players must have been seen on CnCNet on at least {Def.MinActiveDays} days." : ""));
                 break;
             case "!next" when p is not null && CurrentMatchId is null:
             {
@@ -829,6 +840,58 @@ public sealed class GameRoom
         SendPlayerExtraOptions();
         SendChat($"Map changed to {Map!.Name} by vote.");
         _db.LogEvent(Def.Id, "mappick", p.Nick, p.Ident, p.Host, map.Name);
+    }
+
+    /// <summary>
+    /// "!votekick &lt;nick&gt;": half of the other players (at least two) remove a player who will not ready
+    /// up, cannot connect or spoils games, and keep them out of this room for VoteKickBanHours.
+    /// </summary>
+    private void HandleVoteKick(Player voter, string? targetNick)
+    {
+        int hours = Def.VoteKickBanHours;
+        if (string.IsNullOrWhiteSpace(targetNick))
+        {
+            SendChat($"Usage: !votekick <nick> - half of the other players voting removes that player from this room for {hours} hours.");
+            return;
+        }
+        var target = FindPlayer(targetNick.Trim().TrimStart('@', '+'));
+        if (target is null)
+        {
+            SendChat($"{targetNick} is not in this room.");
+            return;
+        }
+        if (target == voter)
+        {
+            SendChat($"{voter.Nick}: you cannot vote to remove yourself.");
+            return;
+        }
+        int others = Players.Count - 1;
+        if (others < 2)
+        {
+            SendChat("A kick vote needs at least three players in the room.");
+            return;
+        }
+        int needed = Math.Max(2, (others + 1) / 2);
+        foreach (var voters in _kickVotes.Values) voters.Remove(voter.Nick); // one kick vote per player
+        if (!_kickVotes.TryGetValue(target.Nick, out var set))
+            _kickVotes[target.Nick] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        set.Add(voter.Nick);
+        int votes = set.Count(n => FindPlayer(n) is { } v && v != target);
+        if (votes < needed)
+        {
+            SendChat($"{voter.Nick} votes to remove {target.Nick} ({votes}/{needed}). Type !votekick {target.Nick} to agree.");
+            return;
+        }
+        _kickVotes.Remove(target.Nick);
+        string by = string.Join(", ", set);
+        Log.Info(Tag, $"votekick: {target.Nick} ({target.Ident}@{target.Host}) removed by {by}");
+        _db.LogEvent(Def.Id, "votekick", target.Nick, target.Ident, target.Host, $"by {by}");
+        if (target.Ident is not null)
+            _policy.Ban(target.Ident, Def.Id, TimeSpan.FromHours(hours), "a vote of the other players");
+        SendPrivateMessage(target.Nick, $"The other players voted to remove you from {RoomName}. You can join this room again in {hours} hours.");
+        _ = _irc.SendNowAsync($"KICK {Channel} {target.Nick}");
+        RemovePlayer(target, "kicked by vote");
+        SendChat($"{target.Nick} was removed by vote.");
     }
 
     /// <summary>"!blitz": the room's vote threshold switches it to the Blitz mode and that mode's maps, or back to the configured mode.</summary>
@@ -959,9 +1022,9 @@ public sealed class GameRoom
 
     private void HandleInvite(Player inviter, string? targetNick)
     {
-        if (!Def.AllowInvites || Def.Tier == RoomTier.Open)
+        if (!Def.AllowInvites || !HasEntryRule)
         {
-            SendChat(Def.Tier == RoomTier.Open ? "Anyone can join this room already; just tell them the room name." : "Invites are not enabled in this room.");
+            SendChat(!HasEntryRule ? "Anyone can join this room already; just tell them the room name." : "Invites are not enabled in this room.");
             return;
         }
         if (string.IsNullOrWhiteSpace(targetNick))
@@ -1022,7 +1085,7 @@ public sealed class GameRoom
             return;
         }
 
-        var verdict = _policy.Evaluate(ident, target.Host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback, target.Nick, Def.NickHistoryMinDays);
+        var verdict = _policy.Evaluate(ident, target.Host, Def.Id, Def.Tier, Def.MaxIdentAgeDays, Def.MinIdentAgeDays, Def.UseHostAsFallback, target.Nick, Def.NickHistoryMinDays, Def.MinActiveDays);
         int days = Math.Max(1, Def.InviteDays);
         if (!verdict.Allowed)
             _policy.Add(new WhitelistEntry(ident, Def.Id, "invite", $"{inviter.Nick} ({IdentStore.Normalise(inviter.Ident ?? "?")})",
@@ -1431,6 +1494,7 @@ public sealed class GameRoom
         Options.Reset();
         Options.Apply(Def.GameOptions, "room config");
         if (Mode is not null) Options.Apply(Mode.ForcedOptions, $"game mode {Mode.Name}");
+        if (InBlitz) Options.Apply(Def.BlitzGameOptions, "blitz options");
         Options.Apply(map.ForcedOptions, $"map {map.Name}");
 
         foreach (var p in Players)

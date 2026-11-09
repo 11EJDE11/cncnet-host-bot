@@ -73,7 +73,9 @@ Requirements: .NET 10 SDK to build; the published binary is self-contained.
 ## Checking the protocol against the live client
 
 The bot learns the client version, protocol revision letter and GAME field count from the
-other hosts in `#cncnet-yr-games` at start-up (override with `irc.clientVersion`,
+other hosts in `#cncnet-yr-games` at start-up: the revision and field count most hosts use, and
+within those the newest version at least three hosts broadcast, so a room keeps up with a client
+update while most of the lobby is still on the old build (override with `irc.clientVersion`,
 `irc.protocolRevision`, `irc.gameBroadcastFields`). The game-option layout in
 `gamedata/options.json` cannot be learned; verify it after a client update with:
 
@@ -103,9 +105,12 @@ tunnels (only in V2 mode) and ICMP (optional, for tunnel ranking). Example syste
 | `tier` | `Noob` (kick old idents), `Pro` (kick young/unknown idents), `Open` |
 | `maxIdentAgeDays` / `minIdentAgeDays` | the day limits for the two tiers |
 | `useHostAsFallback` | newbie rooms also look at the cloaked host's first-seen date, so a fresh ident on a known connection still counts as old |
+| `voteKickBanHours` | `!votekick <nick>`: half of the other players (at least two) remove a player and keep them out of this room for this many hours (in memory, so a bot restart clears it). Admin kicks with ban get the same 24 h. 0 disables the command |
+| `minActiveDays` | any tier: refuse idents seen in the chat logs on fewer than this many days; a handed-over ident's days count, so a regular on a new PC still passes. Counts play, not ident age. 0 = off |
 | `nickHistoryMinDays` | newbie rooms also refuse a nick handed over from an older ident (a veteran on a new PC): another ident played the nick on at least this many days, was first seen more than `maxIdentAgeDays` ago, and went quiet when the joining ident appeared (no later than 3 days after it, no more than 180 days before). Nicks are not registered, and a shared name's other users keep playing on their own idents, so they do not match. 0 = ident only |
 | `gameMode`, `maxPlayers`, `requireTeamStartMappings` | map pool filters: maps of the game mode for the room size (4 = 2v2, 6 = 3v3) that have a two-team start layout |
 | `blitzGameMode` | mode that `!blitz` switches the room to by vote (default `Blitz 2v2`), playing that mode's maps that pass the other filters; the room returns to `gameMode` once it is empty. Empty disables the command |
+| `blitzGameOptions` | option overrides applied on top of the Blitz mode's forced options while `!blitz` is in effect (default: superweapons on) |
 | `maps` / `excludedMaps` | maps ticked on the admin page although they are outside the filters / maps ticked off (MPMaps.ini section names) |
 | `autoThreeVsThree`, `autoThreeVsThreeLobbyUsers` | enlarge the room to 3v3 while the lobby channel has more than N users; switches only while the room is empty and drops back 10% below N |
 | `nextMapPenalty` | each passed `!next` lowers that map's pick weight in this room: 1 / (1 + penalty × max(0, skips − plays/2)), never below 0.2 |
@@ -116,4 +121,4 @@ tunnels (only in V2 mode) and ICMP (optional, for tunnel ranking). Example syste
 | `tunnel.preferred` | name/country fragments tried in order for the static modes |
 | `gameOptions` | check box / drop-down overrides by control name, e.g. `chkCrates=true`, `cmbCredits=3` |
 
-In-room chat commands for players: `!map`, `!next` (vote for a random other map), `!mappick <part of a name>` (half the room voting for the same map switches to it), `!vote <option> [option ...]` (each option is its own vote; `!vote sw france` casts two), `!blitz` (vote to switch to the Blitz 2v2 mode and its maps, and back), `!rules`, `!help`, `!invite <nick>` where enabled.
+In-room chat commands for players: `!map`, `!next` (vote for a random other map), `!mappick <part of a name>` (half the room voting for the same map switches to it), `!vote <option> [option ...]` (each option is its own vote; `!vote sw france` casts two), `!blitz` (vote to switch to the Blitz 2v2 mode and its maps, and back), `!votekick <nick>` (half of the other players remove a player for a day), `!rules`, `!help`, `!invite <nick>` where enabled.

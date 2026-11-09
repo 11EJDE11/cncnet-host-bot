@@ -15,7 +15,10 @@ public sealed class LobbyObserver
     private readonly string _broadcastChannel;
     private readonly object _gate = new();
     private readonly Dictionary<string, HostedGame> _games = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<(string revision, string version, int fields), int> _samples = new();
+    /// <summary>Hosts seen broadcasting each (revision, version, field count) triple.</summary>
+    private readonly Dictionary<(string revision, string version, int fields), HashSet<string>> _samples = new();
+    /// <summary>Distinct hosts a version needs before it can be chosen over the majority's.</summary>
+    private const int MinHostsForVersion = 3;
 
     public LobbyObserver(IrcClient irc, string broadcastChannel)
     {
@@ -23,14 +26,44 @@ public sealed class LobbyObserver
         irc.MessageReceived += OnMessage;
     }
 
-    public int SampleCount { get { lock (_gate) return _samples.Values.Sum(); } }
+    public int SampleCount { get { lock (_gate) return _samples.Values.Sum(s => s.Count); } }
 
-    /// <summary>The most common (revision, version, field count) triple seen so far, or null.</summary>
+    /// <summary>
+    /// The client to host for: the revision and field count most hosts use, and within those the newest
+    /// version at least <see cref="MinHostsForVersion"/> hosts broadcast. During a rollout the majority
+    /// still runs the old build, but the client updates itself at launch, so everyone arriving from now on
+    /// is on the new one and a room broadcast with the old version string shows them "Incompatible".
+    /// </summary>
     public (string revision, string version, int fields)? Dominant()
     {
         lock (_gate)
         {
-            return _samples.Count == 0 ? null : _samples.OrderByDescending(kv => kv.Value).First().Key;
+            if (_samples.Count == 0) return null;
+            var (revision, fields) = _samples.GroupBy(kv => (kv.Key.revision, kv.Key.fields))
+                .OrderByDescending(g => g.Sum(kv => kv.Value.Count)).First().Key;
+            var family = _samples.Where(kv => kv.Key.revision == revision && kv.Key.fields == fields).ToList();
+            var attested = family.Where(kv => kv.Value.Count >= MinHostsForVersion).ToList();
+            var pool = attested.Count > 0 ? attested : family;
+            return pool.OrderByDescending(kv => VersionNumber(kv.Key.version)).ThenByDescending(kv => kv.Value.Count).First().Key;
+        }
+    }
+
+    /// <summary>"9.4.0" → 9.4.0; anything that does not start with dotted digits sorts lowest.</summary>
+    private static Version VersionNumber(string version)
+    {
+        int end = 0;
+        while (end < version.Length && (char.IsDigit(version[end]) || version[end] == '.')) end++;
+        var parts = version[..end].Split('.', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 && Version.TryParse(string.Join('.', parts.Take(4)), out var v) ? v : new Version(0, 0);
+    }
+
+    /// <summary>"A 9.3.5 x14: 57 hosts, A 9.4.0 x14: 10 hosts" for the log.</summary>
+    public string Summary()
+    {
+        lock (_gate)
+        {
+            return string.Join(", ", _samples.OrderByDescending(kv => kv.Value.Count)
+                .Select(kv => $"{kv.Key.revision} {kv.Key.version} x{kv.Key.fields}: {kv.Value.Count} hosts"));
         }
     }
 
@@ -59,7 +92,9 @@ public sealed class LobbyObserver
         {
             _games[game.Host] = game;
             var key = (game.Revision, game.Version, fields.Length);
-            _samples[key] = _samples.GetValueOrDefault(key) + 1;
+            if (!_samples.TryGetValue(key, out var hosts))
+                _samples[key] = hosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            hosts.Add(game.Host);
         }
     }
 }

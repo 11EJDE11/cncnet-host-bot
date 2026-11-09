@@ -177,11 +177,14 @@ public sealed class RoomHost
         if (!needVersion && !needFields && !needRevision)
             return dialect;
 
+        // Most hosts broadcast within 30 s; a fuller sample matters when two versions are in the lobby at once.
         var deadline = DateTime.UtcNow.AddSeconds(45);
-        while (DateTime.UtcNow < deadline && Observer!.SampleCount < 3)
+        var minimum = DateTime.UtcNow.AddSeconds(30);
+        while (DateTime.UtcNow < deadline && (Observer!.SampleCount < 3 || DateTime.UtcNow < minimum && Observer.SampleCount < 25))
             await Task.Delay(500, ct);
 
         var dominant = Observer!.Dominant();
+        Log.Info(Tag, $"client versions in the lobby: {Observer.Summary()}");
         if (dominant is null)
         {
             if (needVersion)

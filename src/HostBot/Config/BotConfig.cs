@@ -130,6 +130,8 @@ public sealed class RoomConfig
     /// the joining ident appeared. Shared names stay unaffected because their other users keep playing. 0 = ident only.
     /// </summary>
     public int NickHistoryMinDays { get; set; } = 30;
+    /// <summary>Any tier: kick idents seen in the chat logs on fewer than this many days (a handed-over ident's days count). 0 = off.</summary>
+    public int MinActiveDays { get; set; }
     /// <summary>Message sent to the player before the kick, as room chat.</summary>
     public string? KickMessage { get; set; }
     /// <summary>Let players who passed the ident check type "!invite &lt;nick&gt;" to whitelist someone for this room and send them a game invitation.</summary>
@@ -142,6 +144,8 @@ public sealed class RoomConfig
     public string GameMode { get; set; } = "Battle";
     /// <summary>Game mode that "!blitz" switches the room to by vote, playing that mode's maps; the room returns to GameMode once empty. Empty disables the command.</summary>
     public string BlitzGameMode { get; set; } = "Blitz 2v2";
+    /// <summary>Option overrides applied on top of the Blitz mode's forced options while a !blitz vote is in effect (superweapons on by default).</summary>
+    public Dictionary<string, string> BlitzGameOptions { get; set; } = new() { ["cmbSuperWeaponsModifier"] = "0" };
     /// <summary>Room size: 4 for 2v2, 6 for 3v3. Teams are always two equal halves.</summary>
     public int MaxPlayers { get; set; } = 4;
     /// <summary>Open the room as 3v3 (6 players) instead while the CnCNet lobby is busy; the switch happens whenever the room is empty.</summary>
@@ -186,6 +190,8 @@ public sealed class RoomConfig
     public Dictionary<string, string> GameOptions { get; set; } = new();
     /// <summary>Votes needed for "!vote &lt;option&gt;" to flip an option for the current game. 0 disables voting.</summary>
     public int VotesNeeded { get; set; } = 2;
+    /// <summary>How long a player removed by "!votekick" (half of the other players, at least two) stays out of this room. 0 disables the command.</summary>
+    public int VoteKickBanHours { get; set; } = 24;
 }
 
 public sealed class TunnelConfig
