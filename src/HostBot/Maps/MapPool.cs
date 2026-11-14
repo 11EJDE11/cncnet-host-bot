@@ -77,16 +77,15 @@ public sealed class MapPoolFile
     /// The map's first start-position layout that forms exactly two teams of the given size (A and B,
     /// no unused spots), e.g. "A,A,B,B" for 2v2 or "A,A,A,B,B,B" for 3v3. Null if the map has none.
     /// </summary>
-    public static TeamStartMapping? TeamMapping(MapEntry m, int teamSize)
-    {
-        foreach (var t in m.TeamStartMappings)
+    public static TeamStartMapping? TeamMapping(MapEntry m, int teamSize) => TeamMappings(m, teamSize).FirstOrDefault();
+
+    /// <summary>All of the map's two-team layouts of the given team size, in map order (e.g. Left vs Right, Top vs Bottom).</summary>
+    public static List<TeamStartMapping> TeamMappings(MapEntry m, int teamSize) =>
+        m.TeamStartMappings.Where(t =>
         {
             var letters = t.Mapping.Split(',', StringSplitOptions.TrimEntries).Select(s => s.ToUpperInvariant()).ToList();
-            if (letters.Count == teamSize * 2 && letters.Count(l => l == "A") == teamSize && letters.Count(l => l == "B") == teamSize)
-                return t;
-        }
-        return null;
-    }
+            return letters.Count == teamSize * 2 && letters.Count(l => l == "A") == teamSize && letters.Count(l => l == "B") == teamSize;
+        }).ToList();
 
     /// <summary>Team sizes (2 for 2v2, 3 for 3v3, ...) for which the map has a two-team layout.</summary>
     public static List<int> TeamSizes(MapEntry m) =>

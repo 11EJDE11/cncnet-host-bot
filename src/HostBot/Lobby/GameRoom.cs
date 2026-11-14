@@ -156,6 +156,10 @@ public sealed class GameRoom
     private readonly Dictionary<string, HashSet<string>> _kickVotes = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>!blitz voters; only those still in the room count.</summary>
     private readonly HashSet<string> _modeVotes = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>!teams votes: index into the map's team layouts -> voters.</summary>
+    private readonly Dictionary<int, HashSet<string>> _layoutVotes = new();
+    /// <summary>Which of the map's team layouts is in play (0 = the map's first); back to 0 on every map change.</summary>
+    private int _layoutIndex;
     /// <summary>Whether joining is gated at all (tier rule or activity floor), so !invite has something to override.</summary>
     private bool HasEntryRule => Def.Tier != RoomTier.Open || Def.MinActiveDays > 0;
     /// <summary>Game mode in play: the configured one, or the Blitz mode while a !blitz vote is in effect.</summary>
@@ -732,6 +736,7 @@ public sealed class GameRoom
             case "!help":
                 SendChat("Commands: !map (current map), !next (vote for a random other map), !mappick <name> (vote for a map)"
                          + (ListedVoteOptions.Any() ? $", !vote {string.Join("|", ListedVoteOptions.Select(v => v.Name))} (toggle options, several at once)" : "")
+                         + (Def.UseTeamStartMappings ? ", !teams (vote for the map's other team layout, e.g. Top vs Bottom)" : "")
                          + ", !rules"
                          + (BlitzEnabled ? $", !blitz (vote to switch to {Def.BlitzGameMode} maps{(InBlitz ? $" and back to {Def.GameMode}" : "")})" : "")
                          + (Def.VoteKickBanHours > 0 ? ", !votekick <nick> (half of the other players remove a player)" : "")
@@ -752,11 +757,15 @@ public sealed class GameRoom
                 if (DateTime.UtcNow - _mapChangedAt >= TimeSpan.FromSeconds(5))
                     HandleBlitz(p);
                 break;
+            case "!teams" or "!layout" when p is not null && CurrentMatchId is null:
+                if (DateTime.UtcNow - _mapChangedAt >= TimeSpan.FromSeconds(5))
+                    HandleLayoutVote(p, text.Length > cmd.Length ? text[(cmd.Length + 1)..].Trim() : "");
+                break;
             case "!vote" when p is not null && CurrentMatchId is null:
                 HandleVote(p, text.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries).Skip(1).ToList());
                 break;
             case "!map":
-                SendChat($"Map: {Map?.Name} ({Mode?.Name}), {Humans}/{MaxPlayers} players{(Spectators > 0 ? $" + {Spectators} spectating" : "")}. Game starts when everyone is ready.");
+                SendChat($"Map: {Map?.Name} ({Mode?.Name}{(ActiveMapping is { } am ? $", teams {am.Name}" : "")}), {Humans}/{MaxPlayers} players{(Spectators > 0 ? $" + {Spectators} spectating" : "")}. Game starts when everyone is ready.");
                 break;
             case "!rules":
                 SendChat((Def.Tier switch
@@ -935,6 +944,59 @@ public sealed class GameRoom
         SendPlayerExtraOptions();
         Broadcast();
         SendChat($"Switched to {target}: map {Map!.Name}. Ready up again.{(InBlitz ? $" !blitz again goes back to {Def.GameMode} maps." : "")}");
+    }
+
+    /// <summary>
+    /// "!teams [part of a layout name]": the room's vote threshold switches auto-ally to another of the
+    /// map's team layouts (Left vs Right -> Top vs Bottom ...). No name = the next one after the current.
+    /// </summary>
+    private void HandleLayoutVote(Player p, string query)
+    {
+        var layouts = Layouts;
+        if (layouts is not { Count: > 1 })
+        {
+            SendChat(layouts is { Count: 1 } ? $"{Map!.Name} has only one team layout ({layouts[0].Name})." : "Teams are not set by the map in this room.");
+            return;
+        }
+        int current = Math.Min(_layoutIndex, layouts.Count - 1);
+        int target;
+        if (query.Length == 0)
+            target = (current + 1) % layouts.Count;
+        else
+        {
+            target = layouts.FindIndex(t => t.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
+            if (target < 0)
+            {
+                SendChat($"Team layouts on {Map!.Name}: {string.Join(", ", layouts.Select(t => t.Name))}. Type !teams for the next one.");
+                return;
+            }
+            if (target == current)
+            {
+                SendChat($"Teams are already {layouts[current].Name}.");
+                return;
+            }
+        }
+
+        foreach (var voters in _layoutVotes.Values) voters.Remove(p.Nick); // one layout vote per player
+        if (!_layoutVotes.TryGetValue(target, out var set))
+            _layoutVotes[target] = set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        set.Add(p.Nick);
+        int votes = set.Count(n => FindPlayer(n) is not null);
+        int needed = Def.VotesNeeded > 0 ? Math.Min(Def.VotesNeeded, Players.Count) : Players.Count / 2 + 1;
+        string name = layouts[target].Name;
+        if (votes < needed)
+        {
+            SendChat($"{p.Nick} wants teams {name} ({votes}/{needed} votes). Type !teams to agree.");
+            return;
+        }
+        _layoutVotes.Clear();
+        _layoutIndex = target;
+        Log.Info(Tag, $"team layout {layouts[current].Name} -> {name} ({layouts[target].Mapping}) by vote ({p.Nick})");
+        _db.LogEvent(Def.Id, "layout", p.Nick, p.Ident, p.Host, name);
+        ClearReadyStatuses();
+        SendPlayerExtraOptions();
+        SendPlayerOptions();
+        SendChat($"Teams are now {name}. Ready up again.");
     }
 
     /// <summary>Removes late joiners who neither became spectators nor got a player slot within the grace period.</summary>
@@ -1212,7 +1274,11 @@ public sealed class GameRoom
 
     /// <summary>The map's two-team layout for the current room size (2v2 or 3v3), when auto-ally is on.</summary>
     private TeamStartMapping? ActiveMapping =>
-        Def.UseTeamStartMappings && Map is not null ? MapPoolFile.TeamMapping(Map, MaxPlayers / 2) : null;
+        Layouts is { Count: > 0 } l ? l[Math.Min(_layoutIndex, l.Count - 1)] : null;
+
+    /// <summary>The map's two-team layouts for the current room size, when auto-ally is on; null otherwise.</summary>
+    private List<TeamStartMapping>? Layouts =>
+        Def.UseTeamStartMappings && Map is not null ? MapPoolFile.TeamMappings(Map, MaxPlayers / 2) : null;
 
     /// <summary>Auto-ally: bit 5 on and the map's first team layout, so each start position carries its team.</summary>
     private string? _lastPeo;
@@ -1499,6 +1565,8 @@ public sealed class GameRoom
         _votes.Clear();
         _mapVotes.Clear();
         _modeVotes.Clear();
+        _layoutVotes.Clear();
+        _layoutIndex = 0;
         _forceRandomSides = false;
         _forceRandomStarts = Def.ForceRandomStarts;
         _fullCountdownShown = false;

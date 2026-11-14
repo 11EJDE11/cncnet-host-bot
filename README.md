@@ -106,14 +106,14 @@ Example unit and nginx config in `deploy/`.
 | `minActiveDays` | any tier: refuse idents seen on fewer days. 0 = off |
 | `allowInvites`, `inviteDays`, `maxInvitesPerDay` | `!invite <nick>` lets a player vouch for someone the check would refuse |
 | `gameMode`, `maxPlayers` | map pool: maps of this mode for this room size (4 = 2v2, 6 = 3v3) |
-| `requireTeamStartMappings`, `useTeamStartMappings` | only maps with a two-team layout / auto-ally from that layout |
+| `requireTeamStartMappings`, `useTeamStartMappings` | only maps with a two-team layout / auto-ally from the map's first layout; `!teams` votes for another |
 | `forceRandomStarts` | spots locked to Random (and so random teams with auto-ally). `!vote spots` flips it, unlisted |
 | `maps` / `excludedMaps` | extra maps / removed maps (MPMaps.ini section names), set from the admin page |
 | `minPlayersToStart` | start once this many are ready |
 | `maxSpectators` | extra seats for Spectator. The room locks once the player slots are full |
 | `readyGraceSeconds`, `kickUnreadySeconds` | in a full room: warn a player who is not ready, then kick |
 | `startDelaySeconds` | countdown once everyone is ready |
-| `votesNeeded` | votes needed for `!vote`, `!next` and `!blitz`. 0 = `!vote` off |
+| `votesNeeded` | votes needed for `!vote`, `!next`, `!teams` and `!blitz`. 0 = `!vote` off |
 | `voteKickBanHours` | `!votekick`: half of the other players remove someone for this long. 0 = off |
 | `blitzGameMode`, `blitzGameOptions` | mode and option overrides for `!blitz`; empty mode = off |
 | `autoThreeVsThree`, `autoThreeVsThreeLobbyUsers` | become 3v3 while the lobby has more than N users |
@@ -122,5 +122,5 @@ Example unit and nginx config in `deploy/`.
 | `tunnel.mode` | `V3Dynamic` (recommended), `V3`, `V2` |
 | `gameOptions` | option overrides by control name, e.g. `chkCrates: "true"`, `cmbCredits: "3"` |
 
-Player commands: `!help`, `!map`, `!next`, `!mappick <name>`, `!vote <option> [...]`, `!blitz`,
-`!votekick <nick>`, `!rules`, `!invite <nick>`.
+Player commands: `!help`, `!map`, `!next`, `!mappick <name>`, `!vote <option> [...]`, `!teams [layout]`,
+`!blitz`, `!votekick <nick>`, `!rules`, `!invite <nick>`.
